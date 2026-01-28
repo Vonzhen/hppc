@@ -1,1 +1,24 @@
+# HPPC v2.0 - Cloud Commander Configuration
+name = "hppc-cloud-commander"
+main = "index.js"
+compatibility_date = "2026-01-28"
+
+# --- [1] KV 存储绑定 (必须修改) ---
+# 必须绑定名为 "KV" 的空间，用于存储 Tick 信号
+# 获取 ID 方式：运行 `npx wrangler kv:namespace create CONFIG_KV`
+[[kv_namespaces]]
+binding = "KV"
+id = "8b7e21f1df294fde98c455ef10ed2c5b"
+# preview_id = "..." # 本地调试用，可不填
+
+# --- [2] 环境变量说明 (敏感信息勿填于此！) ---
+# 警告：以下变量涉及鉴权，请勿直接明文写入此文件提交 GitHub。
+# 请通过 Cloudflare 网页后台 (Settings -> Variables) 或 CLI 设置。
+#
+# 必需变量清单：
+# - AUTH_TOKEN     : 通信密钥 (与本地 hppc.conf 一致)
+# - TG_TOKEN       : Telegram Bot Token
+# - TG_CHAT_ID     : 您的 TG 用户 ID
+# - SUB_STORE_API  : Sub-Store 的 JSON 导出链接
+
 
