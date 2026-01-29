@@ -1,5 +1,5 @@
 #!/bin/sh
-# --- [ HPCC Core: 炼金术士 (Synthesize) ] ---
+# --- [ HPPC Core: 炼金术士 (Synthesize) ] ---
 # 职责：解析节点 -> 意图平移 -> 铸造防线 -> 发送战报
 
 source /etc/hppc/hppc.conf
