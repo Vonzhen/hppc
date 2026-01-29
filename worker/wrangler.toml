@@ -1,24 +1,29 @@
-# HPPC v2.0 - Cloud Commander Configuration
+# --- [ HPPC: 学城蓝图 (Citadel Blueprint) ] ---
+# 警告：此文件定义了学城的物理架构。
+# 严禁在此处明文刻录任何瓦雷利亚信物 (Secrets)！
+
 name = "hppc-cloud-commander"
 main = "index.js"
 compatibility_date = "2026-01-28"
 
-# --- [1] KV 存储绑定 (必须修改) ---
-# 必须绑定名为 "KV" 的空间，用于存储 Tick 信号
-# 获取 ID 方式：运行 `npx wrangler kv:namespace create CONFIG_KV`
+# --- [1] 星盘连接 (The Astrolabe Binding) ---
+# 必须绑定名为 "KV" 的时空裂隙，用于记录时间线 (Tick)
+# 铸造方式：运行 `npx wrangler kv:namespace create CONFIG_KV` 获取 ID
 [[kv_namespaces]]
 binding = "KV"
 id = "8b7e21f1df294fde98c455ef10ed2c5b"
-# preview_id = "..." # 本地调试用，可不填
+# preview_id = "..." # 本地沙盘演练用，可留空
 
-# --- [2] 环境变量说明 (敏感信息勿填于此！) ---
-# 警告：以下变量涉及鉴权，请勿直接明文写入此文件提交 GitHub。
-# 请通过 Cloudflare 网页后台 (Settings -> Variables) 或 CLI 设置。
+# --- [2] 禁忌咒语说明 (Forbidden Secrets) ---
+# 警告：以下仅列出所需的咒语名称，请勿在此处填入真实值！
+# 任何将密钥明文上传至铁金库 (GitHub) 的行为都将导致防御体系崩溃。
+# 请移步 Cloudflare 后台 (Settings -> Variables) 或使用 CLI 注入。
 #
-# 必需变量清单：
-# - AUTH_TOKEN     : 通信密钥 (与本地 hppc.conf 一致)
-# - TG_TOKEN       : Telegram Bot Token
-# - TG_CHAT_ID     : 您的 TG 用户 ID
-# - SUB_STORE_API  : Sub-Store 的 JSON 导出链接
+# 📜 必需咒语清单：
+# - AUTH_TOKEN     : 瓦雷利亚信物 (需与本地要塞 hppc.conf 中的 CF_TOKEN 一致)
+# - TG_TOKEN       : 渡鸦控制权 (Telegram Bot Token)
+# - TG_CHAT_ID     : 领主精神链接 (Telegram User ID)
+# - SUB_STORE_API  : 铁金库补给线 (Sub-Store JSON Export URL)
 
-
+# [vars]
+# HPPC_VERSION = "2.0" # 非机密的公开铭文可写在此处
