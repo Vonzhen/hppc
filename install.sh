@@ -14,7 +14,7 @@ mkdir -p /etc/hppc /usr/share/hppc/core /usr/share/hppc/lib /usr/share/hppc/bin 
 # 2. 锁定铁金库坐标 (GitHub)
 GH_USER="Vonzhen"
 GH_REPO="hppc"   # 统一为 hppc
-GH_BRANCH="main"
+GH_BRANCH="master"
 GH_BASE_URL="https://raw.githubusercontent.com/$GH_USER/$GH_REPO/$GH_BRANCH"
 
 # 3. 宣誓仪式 (配置生成)
