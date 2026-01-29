@@ -306,7 +306,7 @@ config ruleset 'geositeemby'
 	option enabled '1'
 	option type 'local'
 	option format 'binary'
-	option path '/etc/homeproxy/ruleset/goesite-emby.srs'
+	option path '/etc/homeproxy/ruleset/geosite-emby.srs'
 
 config routing_rule 'categoryadsall'
 	option label 'Category-Ads'
