@@ -1,6 +1,7 @@
 #!/bin/sh
-# --- [ HPPC Module: 物资代官 (Assets) v3.1 ] ---
-# 职责：规则集 (RuleSet) 的订阅、下载、单点获取与通知
+# --- [ HPPC Module: 物资代官 (Assets) v2.3 ] ---
+# 职责：规则集 (RuleSet) 的订阅、下载、战报汇报与手动采购
+# 适配源：MetaCubeX (sing branch) & 私有仓库
 
 source /etc/hppc/hppc.conf
 source /usr/share/hppc/lib/utils.sh
@@ -13,13 +14,14 @@ SRC_PRIVATE="$ASSETS_PRIVATE_REPO"
 # MetaCubeX 仓库基地址 (sing 分支)
 BASE_URL="https://github.com/MetaCubeX/meta-rules-dat/raw/sing"
 
-# 通用下载函数
+# 通用下载器
 download_file() {
     local url="$1"
     local dest="$2"
-    # -k: 允许不安全SSL, -L: 跟随重定向, -z: 只有文件更新了才下载 (基于时间戳)
-    # 注意：GitHub Raw 对 -z 支持不一定完美，主要靠 hash 校验或强制覆盖
+    
+    # -k: 允许不安全SSL, -L: 跟随重定向, -f: 失败不输出
     if curl -k -sL --connect-timeout 15 --retry 2 -f "$url" -o "$dest.tmp"; then
+        # 双重校验：确保文件不为空且不是 HTML 报错页
         if [ -s "$dest.tmp" ] && ! head -n 1 "$dest.tmp" | grep -q "<!DOCTYPE"; then
             mv "$dest.tmp" "$dest"
             return 0
@@ -29,117 +31,125 @@ download_file() {
     return 1
 }
 
-# 核心下载逻辑
+# 核心逻辑：下载单个规则
 download_rule() {
-    local target_filename="$1"
-    local target_path="$2"
-    local source_tag="" # 记录来源用于日志
+    local target_filename="$1"  # 例如: geosite-apple
+    local target_path="$2"      # 例如: /etc/homeproxy/ruleset/geosite-apple.srs
+    
+    log_info "正在寻访典籍: $target_filename ..."
 
-    # [策略 A] 私有库优先
+    # [策略 A] 私有库优先 (Private First)
     if [ -n "$SRC_PRIVATE" ]; then
+        # 拼接逻辑: 私有源基地址 + / + 文件名.srs
         if download_file "$SRC_PRIVATE/$target_filename.srs" "$target_path"; then
-            log_success "⚔️ [私有] 获取成功: $target_filename"
+            log_success "⚔️ [私有] 已获取: $target_filename"
             return 0
         fi
     fi
 
-    # [策略 B] MetaCubeX 级联搜寻
+    # [策略 B] 智能解析 MetaCubeX 仓库结构
+    # 拆解前缀: geosite-apple -> type="geosite", name="apple"
     local type="${target_filename%%-*}"
     local name="${target_filename#*-}"
-    local urls_to_try="$BASE_URL/geo/$type/$name.srs $BASE_URL/geo-lite/$type/$name.srs"
+
+    local urls_to_try=""
+    # 尝试顺序 1: Standard 目录
+    urls_to_try="$urls_to_try $BASE_URL/geo/$type/$name.srs"
+    # 尝试顺序 2: Lite 目录 (解决 geoip-apple 等缺失问题)
+    urls_to_try="$urls_to_try $BASE_URL/geo-lite/$type/$name.srs"
 
     for url in $urls_to_try; do
         if download_file "$url" "$target_path"; then
-            log_success "📚 [公共] 获取成功: $target_filename"
+            log_success "📚 [公共] 已获取: $target_filename"
             return 0
         fi
     done
 
-    log_err "物资缺失: $target_filename"
+    log_err "物资缺失: $target_filename (所有源均未找到)"
     return 1
 }
 
-# [模式 1] 依赖补全 (静默模式，只补缺)
+# 模式 1: 依赖补全 (HPPC 调用)
 resolve_deps() {
     local config_file="$1"
     log_info "代官正在核对物资清单..."
     grep "option path" "$config_file" | awk -F"'" '{print $2}' | sort | uniq | while read -r file_path; do
         if [ ! -s "$file_path" ]; then
-            name=$(basename "$file_path" | sed 's/\.srs$//; s/\.json$//')
+            filename=$(basename "$file_path")
+            name=$(echo "$filename" | sed 's/\.srs$//; s/\.json$//')
             log_warn "发现短缺: $name，启动紧急采购..."
             download_rule "$name" "$file_path"
         fi
     done
 }
 
-# [模式 2] 全量更新 (带战报)
+# 模式 2: 手动采购 (CLI 调用)
+download_manual() {
+    local name="$1"
+    local path="$RULE_DIR/$name.srs"
+    
+    if [[ "$name" != geosite-* ]] && [[ "$name" != geoip-* ]]; then
+        log_err "格式错误！名称必须以 'geosite-' 或 'geoip-' 开头。"
+        return 1
+    fi
+
+    if download_rule "$name" "$path"; then
+        echo ""
+        log_success "✅ 规则集已入库: $path"
+        echo -e "${C_INFO}提示:${C_RESET} 请记得在 hp_base.uci 中添加配置引用它。"
+    else
+        echo ""
+        log_err "❌ 下载失败，请检查名称是否正确。"
+    fi
+}
+
+# 模式 3: 全量更新 & 战报 (Cron 调用)
 update_all() {
     log_info "开始每日物资修缮..."
     CURRENT_CONF="/etc/config/homeproxy"
     [ ! -f "$CURRENT_CONF" ] && return
+    
+    local total=0; local success=0; local fail=0; local failed_list=""
 
-    local updated_count=0
-    local updated_list=""
-
-    # 创建临时文件列表
-    tmp_list=$(mktemp)
-    grep "option path" "$CURRENT_CONF" | awk -F"'" '{print $2}' | sort | uniq > "$tmp_list"
-
+    # 使用临时文件防止管道子 Shell 变量丢失
+    grep "option path" "$CURRENT_CONF" | awk -F"'" '{print $2}' | sort | uniq > /tmp/assets_list.tmp
+    
     while read -r file_path; do
-        name=$(basename "$file_path" | sed 's/\.srs$//; s/\.json$//')
+        filename=$(basename "$file_path")
+        name=$(echo "$filename" | sed 's/\.srs$//; s/\.json$//')
         
-        # 计算旧文件的 Hash
-        old_hash="none"
-        [ -f "$file_path" ] && old_hash=$(md5sum "$file_path" | awk '{print $1}')
-
-        # 尝试下载
-        download_rule "$name" "$file_path"
-        
-        # 计算新文件的 Hash
-        new_hash=$(md5sum "$file_path" | awk '{print $1}')
-
-        # 如果 Hash 变了，说明有实质性更新
-        if [ "$old_hash" != "$new_hash" ]; then
-            updated_count=$((updated_count + 1))
-            updated_list="$updated_list $name"
+        total=$((total + 1))
+        if download_rule "$name" "$file_path"; then
+            success=$((success + 1))
+        else
+            fail=$((fail + 1))
+            failed_list="$failed_list\n- $name"
         fi
-    done < "$tmp_list"
-    rm "$tmp_list"
+    done < /tmp/assets_list.tmp
+    rm -f /tmp/assets_list.tmp
 
-    # 发送战报
-    if [ "$updated_count" -gt 0 ]; then
-        log_success "修缮完成，共更新 $updated_count 卷。"
-        # 重载服务以应用新规则 (重要优化)
-        /etc/init.d/homeproxy reload 2>/dev/null
-        
-        # 发送 TG 通知
-        MSG="📚 <b>[HPPC] 藏书阁修缮报告</b>%0A--------------------------------%0A已更新规则: <b>$updated_count</b> 个%0A清单: $updated_list%0A--------------------------------%0A🔄 服务已重载"
-        tg_send "$MSG"
-    else
-        log_info "所有典籍完好，无需更新。"
+    log_info "修缮完成。成功: $success / 失败: $fail"
+
+    # 发送 TG 战报
+    if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
+        local msg="📚 <b>[HPPC] 典籍修缮报告</b>%0A"
+        msg="${msg}--------------------------------%0A"
+        msg="${msg}✅ 成功更新: <b>$success</b> 本%0A"
+        if [ "$fail" -gt 0 ]; then
+            msg="${msg}❌ 更新失败: <b>$fail</b> 本%0A"
+            msg="${msg}⚠️ 缺失清单: $failed_list"
+        else
+            msg="${msg}🎉 所有规则集均为最新。"
+        fi
+        curl -sk -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
+            -d "chat_id=$TG_CHAT_ID" -d "parse_mode=HTML" -d "text=$msg" > /dev/null 2>&1
     fi
 }
 
-# [模式 3] 单点获取 (手动模式)
-get_single() {
-    local name="$1"
-    # 自动补全路径
-    local path="$RULE_DIR/$name.srs"
-    log_info "领主指定获取: $name ..."
-    if download_rule "$name" "$path"; then
-        echo ""
-        log_success "✅ 下载完成！路径: $path"
-        log_info "提示: 请确保您的 hp_base.uci 或配置中引用了此文件。"
-    else
-        echo ""
-        log_err "❌ 下载失败，请检查名称是否正确 (例如: geosite-google)。"
-    fi
-}
-
-# 入口判断
+# 路由入口
 case "$1" in
     --resolve) resolve_deps "$2" ;;
     --update)  update_all ;;
-    --get)     get_single "$2" ;;
-    *) echo "Usage: $0 {--resolve <file> | --update | --get <name>}" ;;
+    --download) download_manual "$2" ;;
+    *) echo "Usage: $0 {--resolve <file> | --update | --download <name>}" ;;
 esac
