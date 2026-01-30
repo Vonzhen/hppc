@@ -302,11 +302,11 @@ config ruleset 'geositetencent'
 	option path '/etc/homeproxy/ruleset/geosite-tencent.srs'
 
 config ruleset 'geositeemby'
-	option label 'geosite-emby'
+	option label 'geosite-myemby'
 	option enabled '1'
 	option type 'local'
 	option format 'binary'
-	option path '/etc/homeproxy/ruleset/geosite-emby.srs'
+	option path '/etc/homeproxy/ruleset/geosite-myemby.srs'
 
 config routing_rule 'categoryadsall'
 	option label 'Category-Ads'
