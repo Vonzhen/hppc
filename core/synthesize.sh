@@ -120,7 +120,7 @@ while IFS= read -r line; do
 done < "$TMP_BASE.raw"
 rm "$TMP_BASE.raw"
 
-# 3.5 供应链核查 (Supply Chain Check) 
+# 供应链核查 (Supply Chain Check) 
 if [ -f "$MODULE_ASSETS" ]; then
     # 呼叫物资代官，检查 TMP_BASE 中引用的规则文件是否存在
     # 如果不存在，代官会自动下载 (优先私有源)
