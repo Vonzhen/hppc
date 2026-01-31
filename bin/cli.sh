@@ -1,36 +1,22 @@
 #!/bin/sh
-# --- [ HPPC: Castellan Dashboard v2.4 ] ---
-# 更新: WebUI 集成回滚与诊断功能
+# --- [ HPPC: Castellan Dashboard v2.5 ] ---
+# 更新: 手动更新规则后，若重启失败支持立即回滚
 
 source /etc/hppc/hppc.conf
 source /usr/share/hppc/lib/utils.sh
-
-# ------------------------------------------------
-# 1. 功能模块 (Functions)
-# ------------------------------------------------
 
 # 诊断模块
 run_doctor() {
     echo -e "\n🩺 \033[1;33m正在进行要塞诊断 (System Doctor)...\033[0m"
     echo "-------------------------------------"
-    
-    check_item() {
-        if eval "$2"; then echo -e "  ✅ $1"; else echo -e "  ❌ $1"; fi
-    }
+    check_item() { if eval "$2"; then echo -e "  ✅ $1"; else echo -e "  ❌ $1"; fi }
     
     check_item "网络连通 (GitHub)" "curl -kIs https://api.github.com | grep '200' >/dev/null"
     check_item "信使 (curl)" "command -v curl >/dev/null"
     check_item "翻译官 (jq)" "command -v jq >/dev/null"
     check_item "配置文件" "[ -f /etc/hppc/hppc.conf ] && [ -n '$CF_TOKEN' ]"
     check_item "规则目录" "[ -d /etc/homeproxy/ruleset ]"
-    
-    # 检查 HomeProxy 进程
-    if /etc/init.d/homeproxy status 2>/dev/null | grep -q "running"; then
-        echo -e "  ✅ 运行状态 (Running)"
-    else
-        echo -e "  ⚠️ 运行状态 (Stopped)"
-    fi
-    
+    check_item "运行状态" "/etc/init.d/homeproxy status 2>/dev/null | grep -q 'running'"
     echo "-------------------------------------"
     echo "诊断完成。若有 ❌，请检查网络或执行 'u' 升级修复。"
 }
@@ -43,18 +29,13 @@ run_uninstall() {
     read confirm
     if [ "$confirm" == "y" ] || [ "$confirm" == "Y" ]; then
         echo "执行焦土战术..."
-        # 移除 WebUI
         uci delete luci.hppc_group 2>/dev/null
         uci delete luci.hppc_sync 2>/dev/null
         uci delete luci.hppc_assets 2>/dev/null
         uci delete luci.hppc_rollback 2>/dev/null
         uci delete luci.hppc_doctor 2>/dev/null
         uci commit luci
-        
-        # 移除 Cron
         (crontab -l 2>/dev/null | grep -v "hppc" | grep -v "daemon.sh" | grep -v "assets.sh") | crontab -
-        
-        # 删除文件
         rm -rf /usr/share/hppc /etc/hppc /usr/bin/hppc /tmp/hp_*
         echo -e "${C_OK}✅ 拆除完毕。江湖路远，有缘再见。${C_RESET}"
         exit 0
@@ -63,53 +44,40 @@ run_uninstall() {
     fi
 }
 
-# WebUI 集成模块 (LuCI Custom Commands)
+# WebUI 集成模块
 setup_webui() {
     echo -e "\n🌐 \033[1;33m正在部署 WebUI 指挥台...\033[0m"
-    
-    # 检查依赖
     if ! opkg list-installed | grep -q luci-app-commands; then
         echo "正在安装 luci-app-commands..."
         opkg update && opkg install luci-app-commands
-        if [ $? -ne 0 ]; then
-            echo -e "${C_ERR}❌ 安装失败，请检查网络或软件源。${C_RESET}"
-            return 1
-        fi
     fi
 
-    # 1. 注册分组
     uci set luci.hppc_group=command
     uci set luci.hppc_group.name='HPPC Castellan'
     uci set luci.hppc_group.command='' 
 
-    # 2. 注册指令: 集结 (Sync)
     uci set luci.hppc_sync=command
     uci set luci.hppc_sync.name='⚔️ 集结军队 (Sync Config)'
     uci set luci.hppc_sync.command='/usr/bin/hppc sync'
-    
-    # 3. 注册指令: 规则 (Assets)
+
     uci set luci.hppc_assets=command
     uci set luci.hppc_assets.name='📚 修缮典籍 (Update Rules)'
     uci set luci.hppc_assets.command='/usr/bin/hppc assets'
 
-    # 4. 注册指令: 回滚 (Rollback) [新增]
     uci set luci.hppc_rollback=command
     uci set luci.hppc_rollback.name='🛡️ 紧急回滚 (Rollback)'
     uci set luci.hppc_rollback.command='/usr/bin/hppc rollback'
     
-    # 5. 注册指令: 诊断 (Doctor) [新增]
     uci set luci.hppc_doctor=command
     uci set luci.hppc_doctor.name='🩺 要塞诊断 (System Doctor)'
     uci set luci.hppc_doctor.command='/usr/bin/hppc doctor'
 
     uci commit luci
-    echo -e "${C_OK}✅ 部署完成！${C_RESET}"
-    echo "请刷新 LuCI 页面，进入 [系统] -> [自定义命令] 查看。"
+    echo -e "${C_OK}✅ 部署完成！请刷新 LuCI 页面，查看 [系统] -> [自定义命令]。${C_RESET}"
 }
 
 show_menu() {
     clear
-    # 简单的状态获取
     TICK=$(cat /etc/hppc/last_tick 2>/dev/null || echo "Unknown")
     NODE_COUNT=$(grep "config node" /etc/config/homeproxy 2>/dev/null | wc -l)
     STATUS=$(/etc/init.d/homeproxy status 2>/dev/null | grep -q "running" && echo -e "${C_OK}运行中${C_RESET}" || echo -e "${C_ERR}已停止${C_RESET}")
@@ -145,32 +113,52 @@ show_menu() {
     echo -ne "  ⚔️  请领主下令: "
 }
 
-# ------------------------------------------------
-# 2. 命令行路由 (CLI Router)
-# ------------------------------------------------
-# 允许从 WebUI 或 Cron 直接调用特定功能
+# 命令行路由
 case "$1" in
     sync)     sh /usr/share/hppc/core/fetch.sh && sh /usr/share/hppc/core/synthesize.sh; exit 0 ;;
     assets)   sh /usr/share/hppc/modules/assets.sh --update; exit 0 ;;
-    # [新增] 回滚接口
     rollback) sh /usr/share/hppc/core/rollback.sh; exit 0 ;;
-    # [新增] 诊断接口
     doctor)   run_doctor; exit 0 ;;
-    # [新增] 卸载接口 (WebUI调用不建议，因为需要交互确认，但为了完整性保留)
     uninstall) run_uninstall; exit 0 ;;
 esac
 
-# ------------------------------------------------
-# 3. 交互式菜单 (Interactive Menu)
-# ------------------------------------------------
 while true; do
     show_menu
     read choice
     case $choice in
         1) echo ""; log_info "吹响集结号角..."; sh /usr/share/hppc/core/fetch.sh && sh /usr/share/hppc/core/synthesize.sh; echo ""; echo "按回车返回..."; read ;;
-        2) echo ""; log_info "开始修缮典籍..."; sh /usr/share/hppc/modules/assets.sh --update; echo ""; echo "按回车返回..."; read ;;
         
-        # [手动下载]
+        # [修改部分] 选项 2: 修缮典籍 + 失败回滚逻辑
+        2) 
+           echo ""
+           log_info "开始修缮典籍 (手动模式)..."
+           # 默认为 manual 模式，不传递 auto 参数
+           sh /usr/share/hppc/modules/assets.sh --update
+           
+           echo ""
+           echo -e "${C_WARN}规则集更新已完成。${C_RESET}"
+           echo -ne "是否立即重启 HomeProxy 以应用新规则? [y/N]: "
+           read confirm
+           if [ "$confirm" == "y" ] || [ "$confirm" == "Y" ]; then
+               log_info "正在重启 HomeProxy..."
+               if /etc/init.d/homeproxy restart; then
+                   echo -e "${C_OK}✅ 重启完毕。${C_RESET}"
+               else
+                   # [新增] 重启失败后的交互
+                   echo -e "${C_ERR}❌ 重启失败！服务可能无法启动。${C_RESET}"
+                   echo -ne "${C_WARN}是否立即执行紧急回滚 (Rollback)? [y/N]: ${C_RESET}"
+                   read rb_confirm
+                   if [ "$rb_confirm" == "y" ] || [ "$rb_confirm" == "Y" ]; then
+                       echo ""
+                       sh /usr/share/hppc/core/rollback.sh
+                   fi
+               fi
+           else
+               echo "已跳过重启。"
+           fi
+           echo ""; echo "按回车返回..."; read 
+           ;;
+        
         3) 
            echo ""
            echo -e "${C_INFO}请输入规则集名称 (必须包含前缀):${C_RESET}"
