@@ -106,7 +106,7 @@ ln -sf /usr/share/hppc/bin/cli.sh /usr/bin/hppc
 (crontab -l 2>/dev/null | grep -v "hppc" | grep -v "daemon.sh" | grep -v "assets.sh") | crontab -
 (crontab -l 2>/dev/null; \
  echo "* * * * * /usr/share/hppc/core/daemon.sh"; \
- echo "0 4 * * * /usr/share/hppc/modules/assets.sh --update") | crontab -
+ echo "30 7 * * * /usr/share/hppc/modules/assets.sh --update") | crontab -
 
 echo -e "\n${GREEN}✅ Castellan 系统部署完毕！${NC}"
 echo -e "指令：输入 ${YELLOW}hppc${NC} 进入指挥面板。"
