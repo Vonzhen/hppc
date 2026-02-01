@@ -1,5 +1,8 @@
 #!/bin/sh
-# --- HPCC: The Raven Scrolls (通用库) ---
+# --- HPPC: The Raven Scrolls (通用库) ---
+
+# [修复] 强制声明 PATH，防止 Cron 环境下找不到 jq 或 curl
+export PATH='/usr/sbin:/usr/bin:/sbin:/bin'
 
 # 颜色定义：坦格利安红，提利尔绿，史塔克白
 C_ERR='\033[31m'; C_OK='\033[32m'; C_WARN='\033[33m'; C_INFO='\033[36m'; C_RESET='\033[0m'
