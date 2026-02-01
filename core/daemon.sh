@@ -23,8 +23,8 @@ REMOTE_TICK=$(curl -skL --connect-timeout 10 "https://$CF_DOMAIN/tg-sync?token=$
 LAST_TICK=$(cat "$TICK_FILE" 2>/dev/null || echo "0")
 
 # 3. 命运裁决 (Trigger Update)
-# 使用数字对比 (-gt)
-if [ "$REMOTE_TICK" -gt "$LAST_TICK" ] 2>/dev/null; then
+# 使用数字对比 (-ne)
+if [ "$REMOTE_TICK" -ne "$LAST_TICK" ] 2>/dev/null; then
     
     # [关键修复] 不要在这里先写文件！先去执行任务
     
