@@ -1,7 +1,7 @@
 #!/bin/sh
-# --- [ HPPC Module: 物资代官 (Assets) v3.1 ] ---
-# 职责：规则集下载、MD5 增量更新、备份回滚、自动重启(Auto模式)
-# 修复：补全回滚函数、修正 TG 换行格式
+# --- [ HPPC Module: 物资代官 (Assets) v3.1 Fixed ] ---
+# 职责：规则集下载、MD5 增量更新检测、备份回滚、战报通知
+# 修复：TG换行、自动重启回滚
 
 source /etc/hppc/hppc.conf
 source /usr/share/hppc/lib/utils.sh
@@ -23,9 +23,7 @@ BASE_URL="https://github.com/MetaCubeX/meta-rules-dat/raw/sing"
 download_file() {
     local url="$1"
     local dest="$2"
-    # -k: 忽略SSL, -L: 跟随重定向, -f: 404不写入
     if curl -k -sL --connect-timeout 15 --retry 2 -f "$url" -o "$dest"; then
-        # 校验文件有效性 (非空且非HTML错误页)
         if [ -s "$dest" ] && ! head -n 1 "$dest" | grep -q "<!DOCTYPE"; then
             return 0
         fi
@@ -36,13 +34,12 @@ download_file() {
 
 # [新增] 备份功能
 backup_rules() {
-    # log_info "正在创建规则集快照..."
     rm -rf "$BACKUP_DIR"
     mkdir -p "$BACKUP_DIR"
     cp -a "$RULE_DIR"/* "$BACKUP_DIR"/ 2>/dev/null
 }
 
-# [新增] 回滚功能 (供 CLI 和 Auto 模式调用)
+# [新增] 回滚功能
 restore_rules() {
     if [ -d "$BACKUP_DIR" ] && [ "$(ls -A $BACKUP_DIR)" ]; then
         log_warn "正在执行时光倒流 (Restoring Rules)..."
@@ -67,28 +64,19 @@ fetch_to_temp() {
         fi
     fi
 
-    # [策略 B] MetaCubeX (Standard + Lite)
+    # [策略 B] MetaCubeX
     local type="${name%%-*}"
     local core_name="${name#*-}"
-    
-    # 尝试 Standard
-    if download_file "$BASE_URL/geo/$type/$core_name.srs" "$temp_path"; then
-        return 0
-    fi
-    
-    # 尝试 Lite
-    if download_file "$BASE_URL/geo-lite/$type/$core_name.srs" "$temp_path"; then
-        return 0
-    fi
+    if download_file "$BASE_URL/geo/$type/$core_name.srs" "$temp_path"; then return 0; fi
+    if download_file "$BASE_URL/geo-lite/$type/$core_name.srs" "$temp_path"; then return 0; fi
 
     return 1
 }
 
 # ----------------------------------------------------------
-# 2. 核心功能 (Core Functions)
+# 2. 核心功能
 # ----------------------------------------------------------
 
-# [手动下载]
 download_manual() {
     local name="$1"
     local final_path="$RULE_DIR/$name.srs"
@@ -111,7 +99,6 @@ download_manual() {
     fi
 }
 
-# [依赖补全]
 resolve_deps() {
     local config_file="$1"
     log_info "代官正在核对物资清单..."
@@ -120,7 +107,6 @@ resolve_deps() {
             filename=$(basename "$file_path")
             name=$(echo "$filename" | sed 's/\.srs$//; s/\.json$//')
             log_warn "发现短缺: $name，启动紧急采购..."
-            
             temp_file="/tmp/${name}_resolve.tmp"
             if fetch_to_temp "$name" "$temp_file" >/dev/null; then
                 mv "$temp_file" "$file_path"
@@ -132,7 +118,6 @@ resolve_deps() {
     done
 }
 
-# [全量更新] 智能增量更新 + 备份回滚
 update_all() {
     local mode="$1" # auto / manual
     log_info "开始每日物资修缮 (模式: $mode)..."
@@ -149,7 +134,6 @@ update_all() {
     local fail_count=0
     local change_log=""
     
-    # 提取所有规则路径
     grep "option path" "$CURRENT_CONF" | awk -F"'" '{print $2}' | sort | uniq > "$TEMP_DIR/list.txt"
     
     # 2. 循环检测
@@ -160,34 +144,28 @@ update_all() {
         
         total=$((total + 1))
         
-        # 下载到临时目录
         if fetch_to_temp "$name" "$temp_file" >/dev/null; then
-            # 计算 MD5
             new_md5=$(md5sum "$temp_file" | awk '{print $1}')
             
             if [ -f "$live_path" ]; then
                 old_md5=$(md5sum "$live_path" | awk '{print $1}')
-                
                 if [ "$new_md5" != "$old_md5" ]; then
-                    # MD5 不同 -> 需要更新
                     update_count=$((update_count + 1))
-                    # [修复] 使用 %0A 换行
+                    # [修复] 换行符改为 %0A
                     change_log="${change_log}%0A🔹 <b>$name</b> (更新)"
                     log_info "检测到更新: $name"
                 else
-                    # MD5 相同 -> 删除临时文件
                     rm -f "$temp_file"
                 fi
             else
-                # 本地不存在 -> 新增
                 update_count=$((update_count + 1))
-                # [修复] 使用 %0A 换行
+                # [修复] 换行符改为 %0A
                 change_log="${change_log}%0A✨ <b>$name</b> (新增)"
                 log_info "检测到新增: $name"
             fi
         else
             fail_count=$((fail_count + 1))
-            # [修复] 使用 %0A 换行
+            # [修复] 换行符改为 %0A
             change_log="${change_log}%0A❌ <b>$name</b> (下载失败)"
             log_err "下载失败: $name"
         fi
@@ -203,11 +181,10 @@ update_all() {
     else
         log_info "准备应用 $update_count 个更新..."
         
-        # [步骤 A] 备份旧规则 (调用函数)
+        # [步骤 A] 备份旧规则
         backup_rules
         
         # [步骤 B] 覆盖新规则
-        # 将 TEMP_DIR 里剩余的文件移动过去
         cp -f "$TEMP_DIR"/*.srs "$RULE_DIR"/ 2>/dev/null
         rm -rf "$TEMP_DIR"
         
@@ -225,13 +202,12 @@ update_all() {
                 
                 # 回滚后再次重启
                 if /etc/init.d/homeproxy restart; then
-                    status_msg="%0A🛡️ 重启失败，已<b>回滚</b>并恢复服务。"
+                    status_msg="%0A🛡️ 重启失败，已<b>自动回滚</b>并恢复服务。"
                 else
                     status_msg="%0A💀 严重: 回滚后重启仍失败！"
                 fi
             fi
         else
-            # 手动模式，不重启，由 CLI 处理
             status_msg="%0A⚠️ 已更新文件，请择机重启。"
         fi
     fi
@@ -259,7 +235,6 @@ update_all() {
     fi
 }
 
-# 入口
 case "$1" in
     --resolve) resolve_deps "$2" ;;
     --update)  update_all "$2" ;;
