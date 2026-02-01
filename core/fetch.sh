@@ -1,5 +1,5 @@
 #!/bin/sh
-# --- [ HPPC Core: 军需官 (Fetch) ] ---
+# --- [ HPPC Core: 军需官 (Fetch) v2.1] ---
 # 职责：从学城拉取节点情报
 
 source /etc/hppc/hppc.conf
