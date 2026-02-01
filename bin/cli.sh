@@ -1,6 +1,6 @@
 #!/bin/sh
-# --- [ HPPC: Castellan Dashboard v2.5 Fixed ] ---
-# 修复: WebUI 菜单不显示问题
+# --- [ HPPC: Castellan Dashboard v2.6 Fixed ] ---
+# 修复: 移除 WebUI 中显示 undefined 的无效标题项
 
 source /etc/hppc/hppc.conf
 source /usr/share/hppc/lib/utils.sh
@@ -29,12 +29,14 @@ run_uninstall() {
     read confirm
     if [ "$confirm" == "y" ] || [ "$confirm" == "Y" ]; then
         echo "执行焦土战术..."
+        # 清理所有注册过的 UCI 节点
         uci delete luci.hppc_group 2>/dev/null
         uci delete luci.hppc_sync 2>/dev/null
         uci delete luci.hppc_assets 2>/dev/null
         uci delete luci.hppc_rollback 2>/dev/null
         uci delete luci.hppc_doctor 2>/dev/null
         uci commit luci
+        
         (crontab -l 2>/dev/null | grep -v "hppc" | grep -v "daemon.sh" | grep -v "assets.sh") | crontab -
         rm -rf /usr/share/hppc /etc/hppc /usr/bin/hppc /tmp/hp_*
         echo -e "${C_OK}✅ 拆除完毕。江湖路远，有缘再见。${C_RESET}"
@@ -52,10 +54,10 @@ setup_webui() {
         opkg update && opkg install luci-app-commands
     fi
 
-    uci set luci.hppc_group=command
-    uci set luci.hppc_group.name='HPPC Castellan'
-    uci set luci.hppc_group.command='' 
+    # [修复] 主动删除之前的 bug 标题项 (undefined)
+    uci delete luci.hppc_group 2>/dev/null
 
+    # 重新注册有效命令
     uci set luci.hppc_sync=command
     uci set luci.hppc_sync.name='⚔️ 集结军队 (Sync Config)'
     uci set luci.hppc_sync.command='/usr/bin/hppc sync'
@@ -74,13 +76,13 @@ setup_webui() {
 
     uci commit luci
     
-    # [修复] 刷新 LuCI 缓存，解决菜单不显示问题
+    # 刷新 LuCI 缓存
     echo "正在刷新 LuCI 缓存..."
     rm -rf /tmp/luci-indexcache
     rm -rf /tmp/luci-modulecache/
     /etc/init.d/rpcd restart >/dev/null 2>&1 
     
-    echo -e "${C_OK}✅ 部署完成！请刷新 LuCI 页面，查看 [系统] -> [自定义命令]。${C_RESET}"
+    echo -e "${C_OK}✅ 部署完成！请刷新 LuCI 页面，该死的 'undefined' 应该消失了。${C_RESET}"
 }
 
 show_menu() {
