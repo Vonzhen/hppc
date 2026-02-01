@@ -82,7 +82,7 @@ setup_webui() {
     rm -rf /tmp/luci-modulecache/
     /etc/init.d/rpcd restart >/dev/null 2>&1 
     
-    echo -e "${C_OK}✅ 部署完成！请刷新 LuCI 页面，该死的 'undefined' 应该消失了。${C_RESET}"
+    echo -e "${C_OK}✅ 部署完成！请刷新 LuCI 页面。${C_RESET}"
 }
 
 show_menu() {
