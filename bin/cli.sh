@@ -1,6 +1,6 @@
 #!/bin/sh
-# --- [ HPPC: Castellan Dashboard v2.5 ] ---
-# 更新: 手动更新规则后，若重启失败支持立即回滚
+# --- [ HPPC: Castellan Dashboard v2.5 Fixed ] ---
+# 修复: WebUI 菜单不显示问题
 
 source /etc/hppc/hppc.conf
 source /usr/share/hppc/lib/utils.sh
@@ -73,6 +73,13 @@ setup_webui() {
     uci set luci.hppc_doctor.command='/usr/bin/hppc doctor'
 
     uci commit luci
+    
+    # [修复] 刷新 LuCI 缓存，解决菜单不显示问题
+    echo "正在刷新 LuCI 缓存..."
+    rm -rf /tmp/luci-indexcache
+    rm -rf /tmp/luci-modulecache/
+    /etc/init.d/rpcd restart >/dev/null 2>&1 
+    
     echo -e "${C_OK}✅ 部署完成！请刷新 LuCI 页面，查看 [系统] -> [自定义命令]。${C_RESET}"
 }
 
@@ -128,11 +135,9 @@ while true; do
     case $choice in
         1) echo ""; log_info "吹响集结号角..."; sh /usr/share/hppc/core/fetch.sh && sh /usr/share/hppc/core/synthesize.sh; echo ""; echo "按回车返回..."; read ;;
         
-        # [修改部分] 选项 2: 修缮典籍 + 失败回滚逻辑
         2) 
            echo ""
            log_info "开始修缮典籍 (手动模式)..."
-           # 默认为 manual 模式，不传递 auto 参数
            sh /usr/share/hppc/modules/assets.sh --update
            
            echo ""
@@ -144,7 +149,6 @@ while true; do
                if /etc/init.d/homeproxy restart; then
                    echo -e "${C_OK}✅ 重启完毕。${C_RESET}"
                else
-                   # [新增] 重启失败后的交互
                    echo -e "${C_ERR}❌ 重启失败！服务可能无法启动。${C_RESET}"
                    echo -ne "${C_WARN}是否立即执行紧急回滚 (Rollback)? [y/N]: ${C_RESET}"
                    read rb_confirm
