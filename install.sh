@@ -1,6 +1,7 @@
 #!/bin/sh
-# --- [ HPPC v2.1: Castellan Installer ] ---
+# --- [ HPPC v2.5: Castellan Installer ] ---
 # 职责：环境预检、交互配置、模块装配、哨兵注册
+# 更新日志：集成 SSL 依赖修复、自动重启任务注册
 
 RED='\033[31m'; GREEN='\033[32m'; YELLOW='\033[33m'; BLUE='\033[36m'; NC='\033[0m'
 log() { echo -e "${BLUE}[工兵]${NC} $1"; }
@@ -12,7 +13,7 @@ GH_REPO="hppc"
 GH_BRANCH="master"
 GH_BASE_URL="https://raw.githubusercontent.com/$GH_USER/$GH_REPO/$GH_BRANCH"
 
-echo -e "\n🏰 \033[1;33mHPPC Castellan - 要塞指挥系统 v2.1\033[0m\n"
+echo -e "\n🏰 \033[1;33mHPPC Castellan - 要塞指挥系统 v2.5\033[0m\n"
 
 # [1] 征兵体检 (Pre-flight Check)
 log "正在执行环境预检..."
@@ -20,10 +21,19 @@ PACKAGES=""
 ! command -v curl >/dev/null && PACKAGES="$PACKAGES curl"
 ! command -v jq >/dev/null   && PACKAGES="$PACKAGES jq"
 ! command -v openssl >/dev/null && PACKAGES="$PACKAGES openssl-util"
+# SSL 证书库检查 (关键修复)
+if ! opkg list-installed | grep -q "ca-bundle" && ! opkg list-installed | grep -q "ca-certificates"; then
+    PACKAGES="$PACKAGES ca-bundle"
+fi
 
 if [ -n "$PACKAGES" ]; then
     echo -e "${YELLOW}>> 发现缺失依赖: $PACKAGES，正在征召...${NC}"
-    opkg update && opkg install $PACKAGES
+    opkg update
+    if ! opkg install $PACKAGES; then
+        # 如果 ca-bundle 失败，尝试 ca-certificates
+        opkg install ca-certificates 2>/dev/null
+    fi
+    
     if [ $? -ne 0 ]; then
         echo -e "${RED}❌ 依赖安装失败，请检查网络或软件源。${NC}"; exit 1
     fi
@@ -57,9 +67,9 @@ else
     printf "${YELLOW}4. 渡鸦 Token (TG)${NC} [回车跳过]: "; read -r TG_TOKEN
     printf "${YELLOW}   渡鸦 ChatID (TG)${NC} [回车跳过]: "; read -r TG_ID
 
-    # 3.5 私有军械库 (新功能)
+    # 3.5 私有军械库
     echo -e "${YELLOW}5. 私有规则源 (Private Rules Repo)${NC}"
-    echo "   (例如: https://raw.githubusercontent.com/Me/rules/main)"
+    echo "   (例如: https://raw.githubusercontent.com/Me/rules/main/rules)"
     printf "   请输入 [回车跳过]: "; read -r ASSETS_REPO
     echo "------------------------------------------------"
 
@@ -88,7 +98,7 @@ download_asset "/usr/share/hppc/core/synthesize.sh" "core/synthesize.sh"
 download_asset "/usr/share/hppc/core/fetch.sh"      "core/fetch.sh"
 download_asset "/usr/share/hppc/core/daemon.sh"     "core/daemon.sh"
 download_asset "/usr/share/hppc/core/rollback.sh"   "core/rollback.sh"
-# Lib & Modules (Assets)
+# Lib & Modules
 download_asset "/usr/share/hppc/lib/utils.sh"      "lib/utils.sh"
 download_asset "/usr/share/hppc/modules/assets.sh" "modules/assets.sh"
 # Bin
@@ -102,12 +112,15 @@ done
 # [5] 部署守夜人
 ln -sf /usr/share/hppc/bin/cli.sh /usr/bin/hppc
 
-# 注册 Crontab (Core: 1min, Assets: 04:00 Daily)
+# 注册 Crontab
+# [关键更新] 这里的 assets.sh 加上了 --update auto 参数
 (crontab -l 2>/dev/null | grep -v "hppc" | grep -v "daemon.sh" | grep -v "assets.sh") | crontab -
 (crontab -l 2>/dev/null; \
  echo "* * * * * /usr/share/hppc/core/daemon.sh"; \
- echo "30 7 * * * /usr/share/hppc/modules/assets.sh --update") | crontab -
+ echo "31 7 * * * /usr/share/hppc/modules/assets.sh --update auto") | crontab -
 
 echo -e "\n${GREEN}✅ Castellan 系统部署完毕！${NC}"
 echo -e "指令：输入 ${YELLOW}hppc${NC} 进入指挥面板。"
+# 提示用户注册 WebUI
+echo -e "提示：请运行 'hppc' -> '6) 部署 WebUI' 以开启网页控制。"
 rm -f "$0"
