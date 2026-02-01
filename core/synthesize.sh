@@ -235,7 +235,7 @@ if [ -s "$FINAL_CONF" ]; then
     esac
     
     # 发送 TG (仅通知，不重启)
-    tg_send "$msg\n\n⚠️ <b>指令:</b> <i>节点配置已变更，请择机手动重启。</i>"
+    tg_send "${msg}%0A%0A⚠️ <b>指令:</b> <i>节点配置已变更，请择机手动重启。</i>"
 else
     log_err "熔炼失败 (生成结果为空)！"
     exit 1
