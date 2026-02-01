@@ -1,6 +1,6 @@
 #!/bin/sh
-# --- [ HPPC Core: 炼金术士 (Synthesize) v2.1 ] ---
-# 职责：解析节点 -> 意图平移 -> 供应链核查 (Assets) -> 铸造防线 -> 战报
+# --- [ HPPC Core: 炼金术士 (Synthesize) v3.1 ] ---
+# 职责：解析节点 -> 意图平移 -> 供应链核查 (Assets) -> 铸造防线 -> 战报(仅通知)
 
 source /etc/hppc/hppc.conf
 source /usr/share/hppc/lib/utils.sh
@@ -221,20 +221,21 @@ fi
 # 7. 战报通报 (The Raven's Scroll)
 if [ -s "$FINAL_CONF" ]; then
     cp "$FINAL_CONF" "/etc/config/homeproxy.bak"
-    log_success "配置熔炼完成 (未重启)。"
+    log_success "配置熔炼完成 (新配置已就绪)。"
     
-    # --- 权游风随机战报 ---
+    # --- 权游风随机文案 ---
     stats=$(cat $COUNT_FILE | tr '\n' ' ' | sed 's/=$//')
     rand=$(hexdump -n 1 -e '/1 "%u"' /dev/urandom)
     case $((rand % 5)) in
-        0) msg="🕯️ 报告领主，【$LOCATION】城墙已加固。瓦雷利亚钢已熔炼完毕，丝滑度更胜往昔！" ;;
-        1) msg="🦅 渡鸦传信：【$LOCATION】已完成阵型变换。当前守军分布：$stats" ;;
-        2) msg="🍷 领主大人，【$LOCATION】的守卫已换上新甲，列阵待命，请下达攻坚指令！" ;;
-        3) msg="❄️ 凛冬将至，但【$LOCATION】的炉火正旺。配置已自我进化，现在的守御坚不可摧。" ;;
-        4) msg="🐉 龙焰重铸！【$LOCATION】所有积木已归位，正以 $stats 之势封锁边境！" ;;
+        0) msg="🕯️ 报告领主，【$LOCATION】城墙蓝图已重绘。瓦雷利亚钢已熔炼完毕。" ;;
+        1) msg="🦅 渡鸦传信：【$LOCATION】新阵型演练完成。预备守军分布：$stats" ;;
+        2) msg="🍷 领主大人，【$LOCATION】的新装备已入库，随时可以换装！" ;;
+        3) msg="❄️ 凛冬将至，但【$LOCATION】的炉火正旺。新配置已生成，静候指令。" ;;
+        4) msg="🐉 龙焰重铸！【$LOCATION】积木已归位，只待您一声令下！" ;;
     esac
     
-    tg_send "$msg\n\n⚠️ <b>指令:</b> <i>请手动重启 (/etc/init.d/homeproxy restart)</i>"
+    # 发送 TG (仅通知，不重启)
+    tg_send "$msg\n\n⚠️ <b>指令:</b> <i>节点配置已变更，请择机手动重启。</i>"
 else
     log_err "熔炼失败 (生成结果为空)！"
     exit 1
