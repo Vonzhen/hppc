@@ -1,7 +1,7 @@
 #!/bin/sh
-# --- [ HPPC Module: 物资代官 (Assets) v3.1 Fixed ] ---
-# 职责：规则集下载、MD5 增量更新检测、备份回滚、战报通知
-# 修复：TG换行、自动重启回滚
+# --- [ HPPC Module: 物资代官 (Assets) v3.2 Stable ] ---
+# 职责：规则集下载、MD5 增量更新、备份回滚、战报通知
+# 修复：增加重启后的网络等待时间 (Sleep)，确保 TG 通知不丢失
 
 source /etc/hppc/hppc.conf
 source /usr/share/hppc/lib/utils.sh
@@ -32,14 +32,12 @@ download_file() {
     return 1
 }
 
-# [新增] 备份功能
 backup_rules() {
     rm -rf "$BACKUP_DIR"
     mkdir -p "$BACKUP_DIR"
     cp -a "$RULE_DIR"/* "$BACKUP_DIR"/ 2>/dev/null
 }
 
-# [新增] 回滚功能
 restore_rules() {
     if [ -d "$BACKUP_DIR" ] && [ "$(ls -A $BACKUP_DIR)" ]; then
         log_warn "正在执行时光倒流 (Restoring Rules)..."
@@ -57,14 +55,10 @@ fetch_to_temp() {
     local name="$1"
     local temp_path="$2"
     
-    # [策略 A] 私有库优先
     if [ -n "$SRC_PRIVATE" ]; then
-        if download_file "$SRC_PRIVATE/$name.srs" "$temp_path"; then
-            return 0
-        fi
+        if download_file "$SRC_PRIVATE/$name.srs" "$temp_path"; then return 0; fi
     fi
 
-    # [策略 B] MetaCubeX
     local type="${name%%-*}"
     local core_name="${name#*-}"
     if download_file "$BASE_URL/geo/$type/$core_name.srs" "$temp_path"; then return 0; fi
@@ -76,7 +70,6 @@ fetch_to_temp() {
 # ----------------------------------------------------------
 # 2. 核心功能
 # ----------------------------------------------------------
-
 download_manual() {
     local name="$1"
     local final_path="$RULE_DIR/$name.srs"
@@ -151,7 +144,6 @@ update_all() {
                 old_md5=$(md5sum "$live_path" | awk '{print $1}')
                 if [ "$new_md5" != "$old_md5" ]; then
                     update_count=$((update_count + 1))
-                    # [修复] 换行符改为 %0A
                     change_log="${change_log}%0A🔹 <b>$name</b> (更新)"
                     log_info "检测到更新: $name"
                 else
@@ -159,13 +151,11 @@ update_all() {
                 fi
             else
                 update_count=$((update_count + 1))
-                # [修复] 换行符改为 %0A
                 change_log="${change_log}%0A✨ <b>$name</b> (新增)"
                 log_info "检测到新增: $name"
             fi
         else
             fail_count=$((fail_count + 1))
-            # [修复] 换行符改为 %0A
             change_log="${change_log}%0A❌ <b>$name</b> (下载失败)"
             log_err "下载失败: $name"
         fi
@@ -194,15 +184,21 @@ update_all() {
             if /etc/init.d/homeproxy restart; then
                 status_msg="%0A♻️ 服务自动重启: <b>成功</b>"
                 log_success "服务重启成功。"
+                
+                # [关键修复] 强制等待 20秒，确保代理网络完全恢复后再发通知
+                log_info "等待网络防线稳固 (20s)..."
+                sleep 20
+                
             else
                 log_err "服务启动失败！正在执行自动回滚..."
                 
                 # [步骤 D] 紧急回滚
                 restore_rules
                 
-                # 回滚后再次重启
                 if /etc/init.d/homeproxy restart; then
                     status_msg="%0A🛡️ 重启失败，已<b>自动回滚</b>并恢复服务。"
+                    # 回滚后也要等待
+                    sleep 10
                 else
                     status_msg="%0A💀 严重: 回滚后重启仍失败！"
                 fi
