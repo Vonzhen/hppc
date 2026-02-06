@@ -106,9 +106,35 @@ download_asset "/usr/share/hppc/modules/assets.sh" "modules/assets.sh"
 download_asset "/usr/share/hppc/bin/cli.sh"        "bin/cli.sh"
 # Templates
 wget --no-check-certificate -qO "/usr/share/hppc/templates/hp_base.uci" "$GH_BASE_URL/templates/hp_base.uci"
-for p in vless trojan hysteria2 shadowsocks; do
-    wget --no-check-certificate -qO "/usr/share/hppc/templates/models/$p.uci" "$GH_BASE_URL/templates/models/$p.uci"
-done
+# 加入 anytls 和 tuic 到遍历列表
+# --- 智能模具下载逻辑 ---
+log "正在同步最新兵器模具 (Smart Sync)..."
+# 1. 构建 API 请求地址
+API_URL="https://api.github.com/repos/$GH_USER/$GH_REPO/contents/templates/models?ref=$GH_BRANCH"
+
+# 2. 询问学城 (GitHub API) 目录下有哪些文件
+# 使用 jq 提取所有 name 字段 (文件名)
+TEMPLATE_LIST=$(curl -s "$API_URL" | jq -r '.[].name' 2>/dev/null)
+
+if [ -n "$TEMPLATE_LIST" ]; then
+    # 3. 清理旧模具 (防止改名后残留僵尸文件)
+    rm -f /usr/share/hppc/templates/models/*.uci
+    
+    # 4. 动态遍历下载
+    for uci_file in $TEMPLATE_LIST; do
+        # 只下载 .uci 结尾的文件，防止误下载其他杂项
+        if echo "$uci_file" | grep -q "\.uci$"; then
+            echo "   - 获取模具: $uci_file"
+            wget -qO "/usr/share/hppc/templates/models/$uci_file" "$GH_BASE_URL/templates/models/$uci_file"
+        fi
+    done
+else
+    # [降级方案] 如果 API 请求失败 (如 API 速率限制)，回退到核心列表
+    log_warn "API 连接受限，切换至紧急备用清单..."
+    for p in vless trojan hysteria2 shadowsocks anytls tuic; do
+        wget -qO "/usr/share/hppc/templates/models/$p.uci" "$GH_BASE_URL/templates/models/$p.uci"
+    done
+fi
 
 # [5] 部署守夜人
 ln -sf /usr/share/hppc/bin/cli.sh /usr/bin/hppc
