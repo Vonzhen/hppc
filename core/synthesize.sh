@@ -177,11 +177,18 @@ echo "$JSON_DATA" | jq -c '.[]' | while read -r row; do
     SNIP="$TEMPLATE_DIR/${TYPE}.uci"
     
     if [ -f "$SNIP" ]; then
+        # --- 基础参数提取 ---
         RAW_UTLS=$(echo "$row" | jq -r '.tls.utls // empty')
         [ "$RAW_UTLS" = "null" ] && UTLS_VAL="chrome" || UTLS_VAL=$(echo "$RAW_UTLS" | jq -r '.fingerprint // "chrome"')
         [ "$(echo "$row" | jq -r '.tls.insecure // false')" = "true" ] && INSECURE="1" || INSECURE="0"
         [ "$(echo "$row" | jq -r '.tls.enabled // true')" = "true" ] && TLS="1" || TLS="0"
+        
+        # --- 进阶参数提取 (适配 TUIC/Hysteria) ---
         FLOW=$(echo "$row" | jq -r '.flow // empty')
+        # 提取拥塞控制，默认为 bbr
+        CONGESTION=$(echo "$row" | jq -r '.congestion_control // "bbr"')
+        # 提取 ALPN 数组的第一个元素，默认为 h3
+        ALPN=$(echo "$row" | jq -r '.tls.alpn[0] // "h3"')
         
         content=$(cat "$SNIP")
         # 批量替换模板变量
@@ -194,7 +201,8 @@ echo "$JSON_DATA" | jq -c '.[]' | while read -r row; do
             -e "s/{{METHOD}}/$(echo "$row" | jq -r '.method // empty')/g" \
             -e "s/{{SNI}}/$(echo "$row" | jq -r '.tls.server_name // .server')/g" \
             -e "s/{{INSECURE}}/$INSECURE/g" -e "s/{{TLS}}/$TLS/g" \
-            -e "s/{{UTLS}}/$UTLS_VAL/g" -e "s/{{FLOW}}/$FLOW/g")
+            -e "s/{{UTLS}}/$UTLS_VAL/g" -e "s/{{FLOW}}/$FLOW/g" \
+            -e "s/{{CONGESTION}}/$CONGESTION/g" -e "s/{{ALPN}}/$ALPN/g")
             
         # Reality 特殊处理
         PK=$(echo "$row" | jq -r '.tls.reality.public_key // empty')
