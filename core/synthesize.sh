@@ -167,54 +167,84 @@ for reg in $REGIONS; do
     done
 done
 
-# 5. 注入瓦雷利亚节点 (Nodes)
-log_info "正在注入瓦雷利亚节点..."
+# ==========================================
+# 5. 注入瓦雷利亚节点 (The Universal Injector)
+# ==========================================
+log_info "正在注入瓦雷利亚节点 (智能映射模式)..."
+
 echo "$JSON_DATA" | jq -c '.[]' | while read -r row; do
+    # 1. 基础身份识别
     LABEL=$(echo "$row" | jq -r '.tag')
-    # 必须与 Group 中的算法一致：md5sum -> awk print $1
     ID=$(echo -n "$LABEL" | md5sum | awk '{print $1}')
     TYPE=$(echo "$row" | jq -r '.type')
+    
+    # 智能寻找模具：只要 templates 目录里有这个 type.uci，就自动加载
     SNIP="$TEMPLATE_DIR/${TYPE}.uci"
     
     if [ -f "$SNIP" ]; then
-        # --- 基础参数提取 ---
+        # --- [超级提取器] 一次性提取所有可能的战术参数 ---
+        
+        # A. 基础五维数据
+        SERVER=$(echo "$row" | jq -r '.server')
+        PORT=$(echo "$row" | jq -r '.server_port')
+        PASSWORD=$(echo "$row" | jq -r '.password // empty')
+        UUID=$(echo "$row" | jq -r '.uuid // empty')
+        METHOD=$(echo "$row" | jq -r '.method // empty')
+        
+        # B. TLS 安全组件
+        # 自动判定 TLS 开关 (Sing-box JSON 只有 tls.enabled=true 时才开启)
+        [ "$(echo "$row" | jq -r '.tls.enabled // false')" = "true" ] && TLS="1" || TLS="0"
+        # 自动判定跳过验证
+        [ "$(echo "$row" | jq -r '.tls.insecure // false')" = "true" ] && INSECURE="1" || INSECURE="0"
+        # SNI 优先取 tls.server_name，没有则取 host，再没有则取 server 地址
+        SNI=$(echo "$row" | jq -r '.tls.server_name // .host // .server')
+        # ALPN (取数组第一个，默认为 h3，部分协议可能需要空)
+        ALPN=$(echo "$row" | jq -r '.tls.alpn[0] // "h3"')
+        # Fingerprint (uTLS)
         RAW_UTLS=$(echo "$row" | jq -r '.tls.utls // empty')
         [ "$RAW_UTLS" = "null" ] && UTLS_VAL="chrome" || UTLS_VAL=$(echo "$RAW_UTLS" | jq -r '.fingerprint // "chrome"')
-        [ "$(echo "$row" | jq -r '.tls.insecure // false')" = "true" ] && INSECURE="1" || INSECURE="0"
-        [ "$(echo "$row" | jq -r '.tls.enabled // true')" = "true" ] && TLS="1" || TLS="0"
-        
-        # --- 进阶参数提取 (适配 TUIC/Hysteria) ---
+
+        # C. 协议特有组件 (VLESS/TUIC/Hysteria)
         FLOW=$(echo "$row" | jq -r '.flow // empty')
-        # 提取拥塞控制，默认为 bbr
         CONGESTION=$(echo "$row" | jq -r '.congestion_control // "bbr"')
-        # 提取 ALPN 数组的第一个元素，默认为 h3
-        ALPN=$(echo "$row" | jq -r '.tls.alpn[0] // "h3"')
+        OBFS_PASS=$(echo "$row" | jq -r '.plugin_opts.password // empty') # ShadowTLS 等插件密码
         
-        content=$(cat "$SNIP")
-        # 批量替换模板变量
-        content=$(echo "$content" | sed \
-            -e "s/{{ID}}/$ID/g" -e "s/{{LABEL}}/$LABEL/g" \
-            -e "s/{{SERVER}}/$(echo "$row" | jq -r '.server')/g" \
-            -e "s/{{PORT}}/$(echo "$row" | jq -r '.server_port')/g" \
-            -e "s/{{PASSWORD}}/$(echo "$row" | jq -r '.password // empty')/g" \
-            -e "s/{{UUID}}/$(echo "$row" | jq -r '.uuid // empty')/g" \
-            -e "s/{{METHOD}}/$(echo "$row" | jq -r '.method // empty')/g" \
-            -e "s/{{SNI}}/$(echo "$row" | jq -r '.tls.server_name // .server')/g" \
-            -e "s/{{INSECURE}}/$INSECURE/g" -e "s/{{TLS}}/$TLS/g" \
-            -e "s/{{UTLS}}/$UTLS_VAL/g" -e "s/{{FLOW}}/$FLOW/g" \
-            -e "s/{{CONGESTION}}/$CONGESTION/g" -e "s/{{ALPN}}/$ALPN/g")
-            
-        # Reality 特殊处理
+        # D. Reality 组件 (存在即启用)
         PK=$(echo "$row" | jq -r '.tls.reality.public_key // empty')
         SID=$(echo "$row" | jq -r '.tls.reality.short_id // empty')
         if [ -n "$PK" ] && [ "$PK" != "null" ]; then
-             content=$(echo "$content" | sed -e "s/{{REALITY_ENABLE}}/1/g" -e "s/{{REALITY_PK}}/$PK/g" -e "s/{{REALITY_SID}}/$SID/g")
+             REALITY_ENABLE="1"
         else
-             content=$(echo "$content" | sed -e "s/{{REALITY_ENABLE}}/0/g")
+             REALITY_ENABLE="0"
+             PK=""; SID=""
         fi
+
+        # --- [全量熔炼] 执行统一替换 ---
+        # 无论模板里有没有 {{CONGESTION}}，都尝试替换。没有的变量会被 sed 忽略，不会报错。
         
-        echo "$content" >> "$TMP_NODES"
+        cat "$SNIP" | sed \
+            -e "s/{{ID}}/$ID/g" \
+            -e "s/{{LABEL}}/$LABEL/g" \
+            -e "s/{{SERVER}}/$SERVER/g" \
+            -e "s/{{PORT}}/$PORT/g" \
+            -e "s/{{PASSWORD}}/$PASSWORD/g" \
+            -e "s/{{UUID}}/$UUID/g" \
+            -e "s/{{METHOD}}/$METHOD/g" \
+            -e "s/{{TLS}}/$TLS/g" \
+            -e "s/{{SNI}}/$SNI/g" \
+            -e "s/{{INSECURE}}/$INSECURE/g" \
+            -e "s/{{ALPN}}/$ALPN/g" \
+            -e "s/{{UTLS}}/$UTLS_VAL/g" \
+            -e "s/{{FLOW}}/$FLOW/g" \
+            -e "s/{{CONGESTION}}/$CONGESTION/g" \
+            -e "s/{{REALITY_ENABLE}}/$REALITY_ENABLE/g" \
+            -e "s/{{REALITY_PK}}/$PK/g" \
+            -e "s/{{REALITY_SID}}/$SID/g" \
+            >> "$TMP_NODES"
+            
         echo "" >> "$TMP_NODES"
+    # else
+        # log_debug "未找到协议模板: $TYPE (跳过)"
     fi
 done
 
