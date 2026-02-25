@@ -1,6 +1,7 @@
 #!/bin/sh
-# --- [ HPPC Core: 炼金术士 (Synthesize) v3.1 ] ---
+# --- [ HPPC Core: 炼金术士 (Synthesize) v3.2.3 ] ---
 # 职责：解析节点 -> 意图平移 -> 供应链核查 (Assets) -> 铸造防线 -> 战报(仅通知)
+# 修复：移除 sort -u，使用 awk 数组去重以保留机场在源数据中的原始顺序
 
 source /etc/hppc/hppc.conf
 source /usr/share/hppc/lib/utils.sh
@@ -36,14 +37,14 @@ map_logic() {
 
     local seed=$(hexdump -n 2 -e '/2 "%u"' /dev/urandom)
     
-    # --- 分层随机注入 (Tiered Random Injection) ---
+    # --- 🛡️ 兵力调度算法 (Tiered Random Injection) ---
     if [ "$num" -le 3 ]; then
-        # 前排精锐 (Top 50%)
+        # 前卫精锐 (Top 50%)
         local limit=$(( (N + 1) / 2 ))
         local rand_idx=$(( (seed % (limit > 0 ? limit : 1)) + 1 ))
         printf "%s%02d" "$reg" "$rand_idx"
     else
-        # 后备军团 (Bottom 50%)
+        # 预备军团 (Bottom 50%)
         local start=$(( N / 2 + 1 ))
         local range=$(( N - start + 1 ))
         local rand_idx=$(( (seed % (range > 0 ? range : 1)) + start ))
@@ -75,8 +76,13 @@ if [ ! -f "$JSON_FILE" ]; then
 fi
 
 JSON_DATA=$(cat "$JSON_FILE" | jq -c '.outbounds')
-# 提取机场前缀 (例如 luckin, Totoro)
-AIRPORTS=$(echo "$JSON_DATA" | jq -r '.[] | .tag' | awk '{print $2}' | awk -F'-' '{print $1}' | awk '!x[$0]++')
+
+# --- 🦅 战旗识别 (Banner Identification) [时序保序修复] ---
+# 逻辑说明:
+# 1. grep / sed 负责精准截取。
+# 2. awk '{ if(!x[$NF]++) print $NF }' 取代了原本的 sort -u。
+#    它将识别到的最新军团标识存入哈希表 x，只有初次见到的标识才会放行，完美维持原序列。
+AIRPORTS=$(echo "$JSON_DATA" | jq -r '.[] | .tag' | grep -iE -e '-(HK|SG|TW|JP|US)' | sed -E 's/-(HK|SG|TW|JP|US|hk|sg|tw|jp|us).*//' | awk '{ if(!x[$NF]++) print $NF }')
 
 echo -n > "$COUNT_FILE"
 REGIONS="HK SG TW JP US"
@@ -85,7 +91,8 @@ for reg in $REGIONS; do
     count=0
     lower_reg=$(echo "$reg" | tr 'A-Z' 'a-z')
     for ap in $AIRPORTS; do
-        has_nodes=$(echo "$JSON_DATA" | jq -r ".[] | select(.tag | contains(\"$ap\")) | select(.tag | contains(\"$reg\")) | .tag" | head -1)
+        # --- 🛡️ 兵力清点 (Muster Roll) ---
+        has_nodes=$(echo "$JSON_DATA" | jq -r '.[] | .tag' | grep -iF -e "${ap}-${reg}" | head -1)
         [ -n "$has_nodes" ] && count=$((count + 1))
     done
     echo "${lower_reg}=${count}" >> "$COUNT_FILE"
@@ -123,7 +130,6 @@ rm "$TMP_BASE.raw"
 # 供应链核查 (Supply Chain Check) 
 if [ -f "$MODULE_ASSETS" ]; then
     # 呼叫物资代官，检查 TMP_BASE 中引用的规则文件是否存在
-    # 如果不存在，代官会自动下载 (优先私有源)
     sh "$MODULE_ASSETS" --resolve "$TMP_BASE"
 else
     log_warn "物资代官 (Assets) 未就位，跳过规则集检查。"
@@ -137,9 +143,10 @@ for reg in $REGIONS; do
     # 设置国旗
     case "$reg" in "HK") flag="🇭🇰" ;; "SG") flag="🇸🇬" ;; "TW") flag="🇹🇼" ;; "JP") flag="🇯🇵" ;; "US") flag="🇺🇸" ;; esac
     
+    # 这里的 $AIRPORTS 如今是完全按照 Sub-Store 原始顺序排列的
     for ap in $AIRPORTS; do
-        # 获取该机场该地区的所有节点 Tag
-        node_tags=$(echo "$JSON_DATA" | jq -r ".[] | select(.tag | contains(\"$ap\")) | select(.tag | contains(\"$reg\")) | .tag")
+        # --- 🛡️ 军团整编 (Legion Assembly) ---
+        node_tags=$(echo "$JSON_DATA" | jq -r '.[] | .tag' | grep -iF -e "${ap}-${reg}")
         
         if [ -n "$node_tags" ]; then
             group_id="${lower_reg}$(printf "%02d" $idx)"
@@ -153,7 +160,7 @@ for reg in $REGIONS; do
                 echo "    option urltest_tolerance '150'"
                 echo "    option urltest_interrupt_exist_connections '1'"
                 
-                # 循环写入节点列表，使用 IFS= read -r 确保空格和特殊字符安全
+                # 循环写入节点列表
                 echo "$node_tags" | while IFS= read -r tag; do
                     # 使用 md5sum 生成唯一 ID
                     nid=$(echo -n "$tag" | md5sum | awk '{print $1}')
@@ -178,38 +185,31 @@ echo "$JSON_DATA" | jq -c '.[]' | while read -r row; do
     ID=$(echo -n "$LABEL" | md5sum | awk '{print $1}')
     TYPE=$(echo "$row" | jq -r '.type')
     
-    # 智能寻找模具：只要 templates 目录里有这个 type.uci，就自动加载
+    # 智能寻找模具
     SNIP="$TEMPLATE_DIR/${TYPE}.uci"
     
     if [ -f "$SNIP" ]; then
         # --- [超级提取器] 一次性提取所有可能的战术参数 ---
-        
-        # A. 基础五维数据
         SERVER=$(echo "$row" | jq -r '.server')
         PORT=$(echo "$row" | jq -r '.server_port')
         PASSWORD=$(echo "$row" | jq -r '.password // empty')
         UUID=$(echo "$row" | jq -r '.uuid // empty')
         METHOD=$(echo "$row" | jq -r '.method // empty')
         
-        # B. TLS 安全组件
-        # 自动判定 TLS 开关 (Sing-box JSON 只有 tls.enabled=true 时才开启)
+        # TLS 安全组件
         [ "$(echo "$row" | jq -r '.tls.enabled // false')" = "true" ] && TLS="1" || TLS="0"
-        # 自动判定跳过验证
         [ "$(echo "$row" | jq -r '.tls.insecure // false')" = "true" ] && INSECURE="1" || INSECURE="0"
-        # SNI 优先取 tls.server_name，没有则取 host，再没有则取 server 地址
         SNI=$(echo "$row" | jq -r '.tls.server_name // .host // .server')
-        # ALPN (取数组第一个，默认为 h3，部分协议可能需要空)
         ALPN=$(echo "$row" | jq -r '.tls.alpn[0] // "h3"')
-        # Fingerprint (uTLS)
         RAW_UTLS=$(echo "$row" | jq -r '.tls.utls // empty')
         [ "$RAW_UTLS" = "null" ] && UTLS_VAL="chrome" || UTLS_VAL=$(echo "$RAW_UTLS" | jq -r '.fingerprint // "chrome"')
 
-        # C. 协议特有组件 (VLESS/TUIC/Hysteria)
+        # 协议特有组件
         FLOW=$(echo "$row" | jq -r '.flow // empty')
         CONGESTION=$(echo "$row" | jq -r '.congestion_control // "bbr"')
-        OBFS_PASS=$(echo "$row" | jq -r '.plugin_opts.password // empty') # ShadowTLS 等插件密码
+        OBFS_PASS=$(echo "$row" | jq -r '.plugin_opts.password // empty') 
         
-        # D. Reality 组件 (存在即启用)
+        # Reality 组件
         PK=$(echo "$row" | jq -r '.tls.reality.public_key // empty')
         SID=$(echo "$row" | jq -r '.tls.reality.short_id // empty')
         if [ -n "$PK" ] && [ "$PK" != "null" ]; then
@@ -220,8 +220,6 @@ echo "$JSON_DATA" | jq -c '.[]' | while read -r row; do
         fi
 
         # --- [全量熔炼] 执行统一替换 ---
-        # 无论模板里有没有 {{CONGESTION}}，都尝试替换。没有的变量会被 sed 忽略，不会报错。
-        
         cat "$SNIP" | sed \
             -e "s/{{ID}}/$ID/g" \
             -e "s/{{LABEL}}/$LABEL/g" \
@@ -243,8 +241,6 @@ echo "$JSON_DATA" | jq -c '.[]' | while read -r row; do
             >> "$TMP_NODES"
             
         echo "" >> "$TMP_NODES"
-    # else
-        # log_debug "未找到协议模板: $TYPE (跳过)"
     fi
 done
 
