@@ -89,7 +89,7 @@ fi
 
 # [4] 调拨物资
 download_asset() {
-    # [修复] 增加 --no-check-certificate 防止 wget 自身的 SSL 报错
+    # 统一使用带有 SSL 忽略的 wget
     wget --no-check-certificate -qO "$1" "$GH_BASE_URL/$2" && chmod +x "$1"
 }
 
@@ -100,39 +100,38 @@ download_asset "/usr/share/hppc/core/fetch.sh"      "core/fetch.sh"
 download_asset "/usr/share/hppc/core/daemon.sh"     "core/daemon.sh"
 download_asset "/usr/share/hppc/core/rollback.sh"   "core/rollback.sh"
 # Lib & Modules (Assets)
-download_asset "/usr/share/hppc/lib/utils.sh"      "lib/utils.sh"
-download_asset "/usr/share/hppc/modules/assets.sh" "modules/assets.sh"
+download_asset "/usr/share/hppc/lib/utils.sh"       "lib/utils.sh"
+download_asset "/usr/share/hppc/modules/assets.sh"  "modules/assets.sh"
 # Bin
-download_asset "/usr/share/hppc/bin/cli.sh"        "bin/cli.sh"
-# Templates
-wget --no-check-certificate -qO "/usr/share/hppc/templates/hp_base.uci" "$GH_BASE_URL/templates/hp_base.uci"
-# 加入 anytls 和 tuic 到遍历列表
-# --- 智能模具下载逻辑 ---
+download_asset "/usr/share/hppc/bin/cli.sh"         "bin/cli.sh"
+# Templates Base
+download_asset "/usr/share/hppc/templates/hp_base.uci" "templates/hp_base.uci"
+
+# --- 智能模具下载逻辑 (Smart Sync) ---
 log "正在同步最新兵器模具 (Smart Sync)..."
 # 1. 构建 API 请求地址
 API_URL="https://api.github.com/repos/$GH_USER/$GH_REPO/contents/templates/models?ref=$GH_BRANCH"
 
 # 2. 询问学城 (GitHub API) 目录下有哪些文件
-# 使用 jq 提取所有 name 字段 (文件名)
-TEMPLATE_LIST=$(curl -s "$API_URL" | jq -r '.[].name' 2>/dev/null)
+# 增加 -k 参数忽略 curl 证书校验，增加 timeout 防止阻塞
+TEMPLATE_LIST=$(curl -skL --connect-timeout 10 "$API_URL" | jq -r '.[].name' 2>/dev/null)
 
-if [ -n "$TEMPLATE_LIST" ]; then
+if [ -n "$TEMPLATE_LIST" ] && [ "$TEMPLATE_LIST" != "null" ]; then
     # 3. 清理旧模具 (防止改名后残留僵尸文件)
     rm -f /usr/share/hppc/templates/models/*.uci
     
-    # 4. 动态遍历下载
+    # 4. 动态遍历下载 (复用 download_asset 函数)
     for uci_file in $TEMPLATE_LIST; do
-        # 只下载 .uci 结尾的文件，防止误下载其他杂项
         if echo "$uci_file" | grep -q "\.uci$"; then
             echo "   - 获取模具: $uci_file"
-            wget -qO "/usr/share/hppc/templates/models/$uci_file" "$GH_BASE_URL/templates/models/$uci_file"
+            download_asset "/usr/share/hppc/templates/models/$uci_file" "templates/models/$uci_file"
         fi
     done
 else
-    # [降级方案] 如果 API 请求失败 (如 API 速率限制)，回退到核心列表
+    # [降级方案] 紧急备用清单
     log_warn "API 连接受限，切换至紧急备用清单..."
     for p in vless trojan hysteria2 shadowsocks anytls tuic; do
-        wget -qO "/usr/share/hppc/templates/models/$p.uci" "$GH_BASE_URL/templates/models/$p.uci"
+        download_asset "/usr/share/hppc/templates/models/$p.uci" "templates/models/$p.uci"
     done
 fi
 
