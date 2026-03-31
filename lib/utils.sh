@@ -27,10 +27,14 @@ tg_send() {
 id_to_filename() {
     local id="$1"
     case "$id" in
-        geositenoncn) echo "geosite-geolocation-!cn" ;;
-        geosite*)     echo "geosite-${id#geosite}" ;;
-        geoip*)       echo "geoip-${id#geoip}" ;;
-        *)            echo "$id" ;;
+        # --- [特殊别名录入区] ---
+        geositenoncn)    echo "geosite-geolocation-!cn" ;;
+        geositeadsall)   echo "geosite-category-ads-all" ;;
+        geositehineteca) echo "geosite-hinet-eca" ;;
+        # --- [通用规则区] ---
+        geosite*)        echo "geosite-${id#geosite}" ;;
+        geoip*)          echo "geoip-${id#geoip}" ;;
+        *)               echo "$id" ;;
     esac
 }
 
@@ -38,7 +42,11 @@ id_to_filename() {
 filename_to_id() {
     local fname="$1"
     case "$fname" in
+        # --- [特殊别名录入区] ---
         geosite-geolocation-\!cn) echo "geositenoncn" ;;
+        geosite-category-ads-all) echo "geositeadsall" ;;
+        geosite-hinet-eca)        echo "geositehineteca" ;;
+        # --- [通用规则区] ---
         geosite-*)                echo "geosite${fname#geosite-}" ;;
         geoip-*)                  echo "geoip${fname#geoip-}" ;;
         *)                        echo "$fname" ;;
