@@ -272,7 +272,7 @@ config routing_rule 'emby'
     option label 'Emby'
     option enabled '1'
     option mode 'default'
-    list rule_set 'geositeemby'
+    list rule_set 'geositemyemby'
     option action 'route'
     option outbound 'hk04'
 
