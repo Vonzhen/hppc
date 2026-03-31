@@ -1,7 +1,6 @@
 #!/bin/sh
-# --- [ HPPC Core: 炼金术士 (Synthesize) v3.2.3 ] ---
-# 职责：解析节点 -> 意图平移 -> 供应链核查 (Assets) -> 铸造防线 -> 战报(仅通知)
-# 修复：移除 sort -u，使用 awk 数组去重以保留机场在源数据中的原始顺序
+# --- [ HPPC Core: 炼金术士 (Synthesize) v3.5 智能按需版 ] ---
+# 职责：解析意图 -> 批量申领 -> 安全熔断 -> 动态铸造 -> 战报通报
 
 source /etc/hppc/hppc.conf
 source /usr/share/hppc/lib/utils.sh
@@ -10,6 +9,9 @@ source /usr/share/hppc/lib/utils.sh
 TMP_BASE="/tmp/hp_base.uci"
 TMP_NODES="/tmp/hp_nodes.uci"
 TMP_GROUPS="/tmp/hp_groups.uci"
+TMP_RULES="/tmp/hp_rules.uci"     # 新增：动态生成的规则集配置
+REQ_LIST="/tmp/hp_assets.req"     # 新增：申领清单
+SUCCESS_LIST="/tmp/hp_assets.success" 
 FINAL_CONF="/etc/config/homeproxy"
 TEMPLATE_DIR="/usr/share/hppc/templates/models"
 COUNT_FILE="/tmp/hp_counts"
@@ -20,31 +22,24 @@ MODULE_ASSETS="/usr/share/hppc/modules/assets.sh"
 # ==========================================
 map_logic() {
     local val=$(echo "$1" | tr -d "' \t\r\n")
-    # 跳过特殊值
     [ "$val" = "direct-out" ] || [ "$val" = "blackhole-out" ] || [ "$val" = "default-out" ] && echo "$val" && return
     
-    # 提取地区 (hk, tw, sg, jp, us)
     local reg=$(echo "$val" | grep -oE "hk|tw|sg|jp|us" | head -1)
     [ -z "$reg" ] && echo "$val" && return
     
-    # 提取编号 (默认 1)
     local num_str=$(echo "$val" | grep -oE "[0-9]+" | sed 's/^0//')
     [ -z "$num_str" ] && local num=1 || local num=$num_str
     
-    # 获取该地区总节点数
     local N=$(grep "^${reg}=" "$COUNT_FILE" | cut -d'=' -f2)
     [ -z "$N" ] || [ "$N" -eq 0 ] && echo "${reg}01" && return
 
     local seed=$(hexdump -n 2 -e '/2 "%u"' /dev/urandom)
     
-    # --- 🛡️ 兵力调度算法 (Tiered Random Injection) ---
     if [ "$num" -le 3 ]; then
-        # 前卫精锐 (Top 50%)
         local limit=$(( (N + 1) / 2 ))
         local rand_idx=$(( (seed % (limit > 0 ? limit : 1)) + 1 ))
         printf "%s%02d" "$reg" "$rand_idx"
     else
-        # 预备军团 (Bottom 50%)
         local start=$(( N / 2 + 1 ))
         local range=$(( N - start + 1 ))
         local rand_idx=$(( (seed % (range > 0 ? range : 1)) + start ))
@@ -57,13 +52,12 @@ map_logic() {
 # 主流程 (The Grand Process)
 # ==========================================
 
-# 1. 准备熔炉 (清理旧残渣)
 echo -n > "$TMP_NODES"
 echo -n > "$TMP_GROUPS"
+echo -n > "$TMP_RULES"
 
-# 2. 检阅兵力 (Counting)
+# --- 检阅兵力 (Counting) ---
 log_info "正在检阅各家族兵力..."
-# 确保 jq 存在
 if ! command -v jq >/dev/null 2>&1; then
     log_err "缺少翻译官 (jq)，请执行 opkg install jq"
     exit 1
@@ -76,12 +70,6 @@ if [ ! -f "$JSON_FILE" ]; then
 fi
 
 JSON_DATA=$(cat "$JSON_FILE" | jq -c '.outbounds')
-
-# --- 🦅 战旗识别 (Banner Identification) [时序保序修复] ---
-# 逻辑说明:
-# 1. grep / sed 负责精准截取。
-# 2. awk '{ if(!x[$NF]++) print $NF }' 取代了原本的 sort -u。
-#    它将识别到的最新军团标识存入哈希表 x，只有初次见到的标识才会放行，完美维持原序列。
 AIRPORTS=$(echo "$JSON_DATA" | jq -r '.[] | .tag' | grep -iE -e '-(HK|SG|TW|JP|US)' | sed -E 's/-(HK|SG|TW|JP|US|hk|sg|tw|jp|us).*//' | awk '{ if(!x[$NF]++) print $NF }')
 
 echo -n > "$COUNT_FILE"
@@ -91,14 +79,13 @@ for reg in $REGIONS; do
     count=0
     lower_reg=$(echo "$reg" | tr 'A-Z' 'a-z')
     for ap in $AIRPORTS; do
-        # --- 🛡️ 兵力清点 (Muster Roll) ---
         has_nodes=$(echo "$JSON_DATA" | jq -r '.[] | .tag' | grep -iF -e "${ap}-${reg}" | head -1)
         [ -n "$has_nodes" ] && count=$((count + 1))
     done
     echo "${lower_reg}=${count}" >> "$COUNT_FILE"
 done
 
-# 3. 重塑战术意图 (Mapping) - 处理 hp_base.uci
+# --- 重塑战术意图 (Mapping) ---
 log_info "正在重塑战术意图 (Hp_Base)..."
 BASE_TEMPLATE="/usr/share/hppc/templates/hp_base.uci"
 
@@ -110,12 +97,10 @@ fi
 cp "$BASE_TEMPLATE" "$TMP_BASE.raw"
 echo -n > "$TMP_BASE"
 
-# 逐行读取并应用映射算法
 while IFS= read -r line; do
     if echo "$line" | grep -q "option outbound"; then
         val=$(echo "$line" | awk -F"'" '{print $2}')
         new_val=$(map_logic "$val")
-        # 只替换确实改变了的值
         if [ "$val" != "$new_val" ]; then
             echo "$line" | sed "s/'$val'/'$new_val'/" >> "$TMP_BASE"
         else
@@ -127,31 +112,86 @@ while IFS= read -r line; do
 done < "$TMP_BASE.raw"
 rm "$TMP_BASE.raw"
 
-# 供应链核查 (Supply Chain Check) 
+# ==========================================
+# [全新阶段] 意图感知与物资申领 (Requisition)
+# ==========================================
+log_info "正在扫描战术意图，签发物资申领单..."
+grep "list rule_set" "$TMP_BASE" | awk -F"'" '{print $2}' | awk '!x[$0]++' > "/tmp/hp_assets_id.list"
+
+echo -n > "$REQ_LIST"
+while read -r id; do
+    [ -n "$id" ] && id_to_filename "$id" >> "$REQ_LIST"
+done < "/tmp/hp_assets_id.list"
+
 if [ -f "$MODULE_ASSETS" ]; then
-    # 呼叫物资代官，检查 TMP_BASE 中引用的规则文件是否存在
-    sh "$MODULE_ASSETS" --resolve "$TMP_BASE"
+    sh "$MODULE_ASSETS" --fetch-list "$REQ_LIST"
 else
-    log_warn "物资代官 (Assets) 未就位，跳过规则集检查。"
+    log_err "物资代官 (Assets) 擅离职守，防线铸造中止！"
+    exit 1
 fi
 
-# 4. 组建固定编制 (Groups)
+# ==========================================
+# [全新阶段] 安全熔断与动态铸造 (Dynamic Casting)
+# ==========================================
+log_info "正在执行动态铸造与安全熔断排查..."
+
+SUCCESS_IDS=" "
+if [ -f "$SUCCESS_LIST" ]; then
+    while read -r fname; do
+        [ -n "$fname" ] && SUCCESS_IDS="${SUCCESS_IDS}$(filename_to_id "$fname") "
+    done < "$SUCCESS_LIST"
+fi
+
+mv "$TMP_BASE" "$TMP_BASE.raw2"
+echo -n > "$TMP_BASE"
+MISSING_COUNT=0
+
+# 1. 熔断剔除
+while IFS= read -r line; do
+    if echo "$line" | grep -q "list rule_set"; then
+        id=$(echo "$line" | awk -F"'" '{print $2}')
+        if echo "$SUCCESS_IDS" | grep -q " $id "; then
+            echo "$line" >> "$TMP_BASE"
+        else
+            log_warn "⚔️ 剔除失效意图: 舍弃规则引用 [$id] 以保全主阵型。"
+            MISSING_COUNT=$((MISSING_COUNT + 1))
+        fi
+    else
+        echo "$line" >> "$TMP_BASE"
+    fi
+done < "$TMP_BASE.raw2"
+rm "$TMP_BASE.raw2"
+
+# 2. 动态铸造
+for id in $SUCCESS_IDS; do
+    [ -z "$id" ] && continue
+    fname=$(id_to_filename "$id")
+    fpath="/etc/homeproxy/ruleset/$fname.srs"
+    rtype="geoip"
+    echo "$fname" | grep -q "^geosite" && rtype="geosite"
+
+    {
+        echo "config ruleset '$id'"
+        echo "    option label '$fname'"
+        echo "    option enabled '1'"
+        echo "    option type 'local'"
+        echo "    option format 'binary'"
+        echo "    option path '$fpath'"
+        echo ""
+    } >> "$TMP_RULES"
+done
+
+# --- 组建固定编制战队 ---
 log_info "正在组建固定编制战队..."
 for reg in $REGIONS; do
     idx=1
     lower_reg=$(echo "$reg" | tr 'A-Z' 'a-z')
-    # 设置国旗
     case "$reg" in "HK") flag="🇭🇰" ;; "SG") flag="🇸🇬" ;; "TW") flag="🇹🇼" ;; "JP") flag="🇯🇵" ;; "US") flag="🇺🇸" ;; esac
     
-    # 这里的 $AIRPORTS 如今是完全按照 Sub-Store 原始顺序排列的
     for ap in $AIRPORTS; do
-        # --- 🛡️ 军团整编 (Legion Assembly) ---
         node_tags=$(echo "$JSON_DATA" | jq -r '.[] | .tag' | grep -iF -e "${ap}-${reg}")
-        
         if [ -n "$node_tags" ]; then
             group_id="${lower_reg}$(printf "%02d" $idx)"
-            
-            # 使用纯 echo 写入，避免 echo -e 的兼容性问题
             {
                 echo "config routing_node '$group_id'"
                 echo "    option label '$flag $reg-$ap'"
@@ -159,44 +199,32 @@ for reg in $REGIONS; do
                 echo "    option enabled '1'"
                 echo "    option urltest_tolerance '150'"
                 echo "    option urltest_interrupt_exist_connections '1'"
-                
-                # 循环写入节点列表
                 echo "$node_tags" | while IFS= read -r tag; do
-                    # 使用 md5sum 生成唯一 ID
                     nid=$(echo -n "$tag" | md5sum | awk '{print $1}')
                     echo "    list urltest_nodes '$nid'"
                 done
                 echo "" 
             } >> "$TMP_GROUPS"
-            
             idx=$((idx + 1))
         fi
     done
 done
 
-# ==========================================
-# 5. 注入瓦雷利亚节点 (The Universal Injector)
-# ==========================================
+# --- 注入瓦雷利亚节点 ---
 log_info "正在注入瓦雷利亚节点 (智能映射模式)..."
-
 echo "$JSON_DATA" | jq -c '.[]' | while read -r row; do
-    # 1. 基础身份识别
     LABEL=$(echo "$row" | jq -r '.tag')
     ID=$(echo -n "$LABEL" | md5sum | awk '{print $1}')
     TYPE=$(echo "$row" | jq -r '.type')
-    
-    # 智能寻找模具
     SNIP="$TEMPLATE_DIR/${TYPE}.uci"
     
     if [ -f "$SNIP" ]; then
-        # --- [超级提取器] 一次性提取所有可能的战术参数 ---
         SERVER=$(echo "$row" | jq -r '.server')
         PORT=$(echo "$row" | jq -r '.server_port')
         PASSWORD=$(echo "$row" | jq -r '.password // empty')
         UUID=$(echo "$row" | jq -r '.uuid // empty')
         METHOD=$(echo "$row" | jq -r '.method // empty')
         
-        # TLS 安全组件
         [ "$(echo "$row" | jq -r '.tls.enabled // false')" = "true" ] && TLS="1" || TLS="0"
         [ "$(echo "$row" | jq -r '.tls.insecure // false')" = "true" ] && INSECURE="1" || INSECURE="0"
         SNI=$(echo "$row" | jq -r '.tls.server_name // .host // .server')
@@ -204,12 +232,9 @@ echo "$JSON_DATA" | jq -c '.[]' | while read -r row; do
         RAW_UTLS=$(echo "$row" | jq -r '.tls.utls // empty')
         [ "$RAW_UTLS" = "null" ] && UTLS_VAL="chrome" || UTLS_VAL=$(echo "$RAW_UTLS" | jq -r '.fingerprint // "chrome"')
 
-        # 协议特有组件
         FLOW=$(echo "$row" | jq -r '.flow // empty')
         CONGESTION=$(echo "$row" | jq -r '.congestion_control // "bbr"')
-        OBFS_PASS=$(echo "$row" | jq -r '.plugin_opts.password // empty') 
         
-        # Reality 组件
         PK=$(echo "$row" | jq -r '.tls.reality.public_key // empty')
         SID=$(echo "$row" | jq -r '.tls.reality.short_id // empty')
         if [ -n "$PK" ] && [ "$PK" != "null" ]; then
@@ -219,7 +244,6 @@ echo "$JSON_DATA" | jq -c '.[]' | while read -r row; do
              PK=""; SID=""
         fi
 
-        # --- [全量熔炼] 执行统一替换 ---
         cat "$SNIP" | sed \
             -e "s/{{ID}}/$ID/g" \
             -e "s/{{LABEL}}/$LABEL/g" \
@@ -244,20 +268,19 @@ echo "$JSON_DATA" | jq -c '.[]' | while read -r row; do
     fi
 done
 
-# 6. 最终合并 (The Merger)
+# --- 最终合并与战报通报 ---
 if [ -s "$TMP_BASE" ] && [ -s "$TMP_NODES" ]; then
-    cat "$TMP_BASE" "$TMP_NODES" "$TMP_GROUPS" > "$FINAL_CONF"
+    # 严格按照层级组合配置：基础意图 -> 动态规则集 -> 固定编制战队 -> 具体兵源节点
+    cat "$TMP_BASE" "$TMP_RULES" "$TMP_GROUPS" "$TMP_NODES" > "$FINAL_CONF"
 else
     log_err "熔炼材料缺失，中止合并！"
     exit 1
 fi
 
-# 7. 战报通报 (The Raven's Scroll)
 if [ -s "$FINAL_CONF" ]; then
     cp "$FINAL_CONF" "/etc/config/homeproxy.bak"
     log_success "配置熔炼完成 (新配置已就绪)。"
     
-    # --- 权游风随机文案 ---
     stats=$(cat $COUNT_FILE | tr '\n' ' ' | sed 's/=$//')
     rand=$(hexdump -n 1 -e '/1 "%u"' /dev/urandom)
     case $((rand % 5)) in
@@ -268,8 +291,11 @@ if [ -s "$FINAL_CONF" ]; then
         4) msg="🐉 龙焰重铸！【$LOCATION】积木已归位，只待您一声令下！" ;;
     esac
     
-    # 发送 TG (仅通知，不重启)
-    tg_send "${msg}%0A%0A⚠️ <b>指令:</b> <i>节点配置已变更，请择机手动重启。</i>"
+    if [ "$MISSING_COUNT" -gt 0 ]; then
+        msg="${msg}%0A%0A⚠️ <b>战损警报:</b> <i>发现 $MISSING_COUNT 个无效规则集，已执行战术熔断（剔除），系统基础运行不受影响。</i>"
+    fi
+    
+    tg_send "${msg}%0A%0A⚔️ <b>指令:</b> <i>语法检阅通过，请择机手动重启防线。</i>"
 else
     log_err "熔炼失败 (生成结果为空)！"
     exit 1
