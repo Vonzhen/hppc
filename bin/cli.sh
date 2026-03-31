@@ -1,11 +1,14 @@
 #!/bin/sh
-# --- [ HPPC: Castellan Dashboard v2.6 Fixed ] ---
+# --- [ HPPC: Castellan Dashboard v3.5 Integrated ] ---
 # 修复: 移除 WebUI 中显示 undefined 的无效标题项
+# 新增: 交互式系统参数配置面板 (Config Manager)
 
 source /etc/hppc/hppc.conf
 source /usr/share/hppc/lib/utils.sh
 
-# 诊断模块
+# ==========================================
+# 诊断与系统控制模块
+# ==========================================
 run_doctor() {
     echo -e "\n🩺 \033[1;33m正在进行要塞诊断 (System Doctor)...\033[0m"
     echo "-------------------------------------"
@@ -21,7 +24,6 @@ run_doctor() {
     echo "诊断完成。若有 ❌，请检查网络或执行 'u' 升级修复。"
 }
 
-# 卸载模块
 run_uninstall() {
     echo -e "\n${C_ERR}⚠️  危险操作：您确定要拆除 HPPC Castellan 系统吗？${C_RESET}"
     echo -e "   这将删除所有脚本、配置、Cron 任务及 WebUI 入口。"
@@ -46,7 +48,6 @@ run_uninstall() {
     fi
 }
 
-# WebUI 集成模块
 setup_webui() {
     echo -e "\n🌐 \033[1;33m正在部署 WebUI 指挥台...\033[0m"
     if ! opkg list-installed | grep -q luci-app-commands; then
@@ -54,7 +55,7 @@ setup_webui() {
         opkg update && opkg install luci-app-commands
     fi
 
-    # [修复] 主动删除之前的 bug 标题项 (undefined)
+    # 主动删除之前的 bug 标题项 (undefined)
     uci delete luci.hppc_group 2>/dev/null
 
     # 重新注册有效命令
@@ -85,6 +86,77 @@ setup_webui() {
     echo -e "${C_OK}✅ 部署完成！请刷新 LuCI 页面。${C_RESET}"
 }
 
+# ==========================================
+# 系统参数配置模块 (Config Manager)
+# ==========================================
+update_config_key() {
+    local key="$1"
+    local name="$2"
+    local conf_file="/etc/hppc/hppc.conf"
+    
+    # 获取当前内存中的变量值
+    local current_val=$(eval echo "\$$key")
+
+    echo -e "\n🔧 正在修改参数: \033[36m$name\033[0m ($key)"
+    echo -e "当前设定值: \033[33m${current_val:-未配置}\033[0m"
+    printf "请输入新值 (直接回车放弃修改，输入 'clear' 清空此项): "
+    read -r new_val
+
+    if [ -z "$new_val" ]; then
+        echo ">> 操作取消，值未改变。"
+        return
+    elif [ "$new_val" = "clear" ]; then
+        new_val=""
+    fi
+
+    # 强制进行输入清洗：剔除潜在的破坏性单引号
+    new_val=$(echo "$new_val" | sed "s/'//g")
+
+    if grep -q "^${key}=" "$conf_file"; then
+        sed "s|^${key}=.*|${key}='${new_val}'|" "$conf_file" > "${conf_file}.tmp"
+        mv "${conf_file}.tmp" "$conf_file"
+    else
+        echo "${key}='${new_val}'" >> "$conf_file"
+    fi
+
+    echo -e "\033[32m✅ 参数已成功更新。\033[0m"
+    source "$conf_file"
+}
+
+menu_settings() {
+    while true; do
+        source /etc/hppc/hppc.conf
+        clear
+        echo -e "\n========================================="
+        echo -e "           ⚙️ 系统参数配置面板           "
+        echo -e "========================================="
+        echo -e " 1) 节点展示名称 (LOCATION) : \033[32m${LOCATION}\033[0m"
+        echo -e " 2) 私有规则源库 (ASSETS)   : \033[32m${ASSETS_PRIVATE_REPO:-未设置}\033[0m"
+        echo -e " 3) Worker 代理域 (CF_DOMAIN): \033[32m${CF_DOMAIN}\033[0m"
+        echo -e " 4) 节点拉取验证码 (CF_TOKEN) : \033[32m${CF_TOKEN}\033[0m"
+        echo -e " 5) TG 机器人密钥 (BOT_TOKEN): \033[32m${TG_BOT_TOKEN:-未设置}\033[0m"
+        echo -e " 6) TG 接收者编号 (CHAT_ID)  : \033[32m${TG_CHAT_ID:-未设置}\033[0m"
+        echo -e " 0) 返回主菜单"
+        echo -e "========================================="
+        printf "请输入序号选择要修改的参数 [0-6]: "
+        read -r choice
+
+        case "$choice" in
+            1) update_config_key "LOCATION" "节点展示名称" ;;
+            2) update_config_key "ASSETS_PRIVATE_REPO" "私有规则源仓库 URL" ;;
+            3) update_config_key "CF_DOMAIN" "Cloudflare Worker 代理域名" ;;
+            4) update_config_key "CF_TOKEN" "节点拉取验证码" ;;
+            5) update_config_key "TG_BOT_TOKEN" "Telegram Bot Token" ;;
+            6) update_config_key "TG_CHAT_ID" "Telegram 接收频道 ID" ;;
+            0) break ;;
+            *) echo -e "\033[31m❌ 无效的选择。\033[0m"; sleep 1 ;;
+        esac
+    done
+}
+
+# ==========================================
+# 主界面与路由
+# ==========================================
 show_menu() {
     clear
     TICK=$(cat /etc/hppc/last_tick 2>/dev/null || echo "Unknown")
@@ -94,8 +166,8 @@ show_menu() {
     echo -e "${C_INFO}=========================================${C_RESET}"
     echo -e "   🐺 \033[1mHPPC Castellan - 要塞指挥系统\033[0m"
     echo -e "${C_INFO}=========================================${C_RESET}"
-    echo -e "   📍 驻地: ${C_WARN}$LOCATION${C_RESET}      🟢 状态: $STATUS"
-    echo -e "   📜 密令: ${C_INFO}$TICK${C_RESET}      🌍 节点: ${C_OK}$NODE_COUNT${C_RESET}"
+    echo -e "   📍 驻地: ${C_WARN}$LOCATION${C_RESET}     🟢 状态: $STATUS"
+    echo -e "   📜 密令: ${C_INFO}$TICK${C_RESET}     🌍 节点: ${C_OK}$NODE_COUNT${C_RESET}"
     echo -e "${C_INFO}-----------------------------------------${C_RESET}"
     echo ""
     echo -e "  1) ⚔️  ${C_OK}集结军队 (Muster)${C_RESET}"
@@ -116,13 +188,16 @@ show_menu() {
     echo -e "  6) 🌐 ${C_OK}部署 WebUI (LuCI Integration)${C_RESET}"
     echo -e "     - 将 HPPC 命令注册到网页后台。"
     echo ""
+    echo -e "  7) ⚙️  ${C_WARN}参数配置 (Settings)${C_RESET}"
+    echo -e "     - 修改节点名称、Token 密钥、TG 通知等参数。"
+    echo ""
     echo -e "-----------------------------------------"
     echo -e "  x) ❌ 拆除要塞    u) 🆙 升级脚本    q) 👋 离开"
     echo ""
     echo -ne "  ⚔️  请领主下令: "
 }
 
-# 命令行路由
+# 命令行直达路由
 case "$1" in
     sync)     sh /usr/share/hppc/core/fetch.sh && sh /usr/share/hppc/core/synthesize.sh; exit 0 ;;
     assets)   sh /usr/share/hppc/modules/assets.sh --update; exit 0 ;;
@@ -131,6 +206,7 @@ case "$1" in
     uninstall) run_uninstall; exit 0 ;;
 esac
 
+# 交互式菜单循环
 while true; do
     show_menu
     read choice
@@ -180,6 +256,7 @@ while true; do
         4) echo ""; log_warn "执行焦土战术..."; sh /usr/share/hppc/core/rollback.sh; echo ""; echo "按回车返回..."; read ;;
         5) run_doctor; echo ""; echo "按回车返回..."; read ;;
         6) setup_webui; echo ""; echo "按回车返回..."; read ;;
+        7) menu_settings ;;
         
         x) run_uninstall ;;
         u) echo ""; log_info "重新打造兵器..."; wget -qO /tmp/install.sh "$GH_RAW_URL/install.sh" && sh /tmp/install.sh; echo ""; echo "按回车返回..."; read ;;
