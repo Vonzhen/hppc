@@ -1,7 +1,7 @@
 #!/bin/sh
-# --- HPPC: The Raven Scrolls (通用库) ---
+# --- HPPC: The Raven Scrolls (通用库) v3.5 ---
 
-# [修复] 强制声明 PATH，防止 Cron 环境下找不到 jq 或 curl
+# 强制声明 PATH，防止 Cron 环境下找不到 jq 或 curl
 export PATH='/usr/sbin:/usr/bin:/sbin:/bin'
 
 # 颜色定义：坦格利安红，提利尔绿，史塔克白
@@ -17,7 +17,30 @@ log_err()     { echo -e "${C_ERR}[噩耗]${C_RESET} $1"; }
 tg_send() {
     [ -z "$TG_BOT_TOKEN" ] || [ -z "$TG_CHAT_ID" ] && return
     local msg="$1"
-    # 在所有消息前加上家族纹章或抬头，这里已经在脚本调用时决定了内容
     curl -sk -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
         -d "chat_id=$TG_CHAT_ID" -d "parse_mode=HTML" -d "text=$msg" > /dev/null 2>&1 &
+}
+
+# --- [新增] 智能别名系统 (Alias System) ---
+
+# [正向翻译] 意图(ID) -> 物资名(Filename)
+id_to_filename() {
+    local id="$1"
+    case "$id" in
+        geositenoncn) echo "geosite-geolocation-!cn" ;;
+        geosite*)     echo "geosite-${id#geosite}" ;;
+        geoip*)       echo "geoip-${id#geoip}" ;;
+        *)            echo "$id" ;;
+    esac
+}
+
+# [反向翻译] 物资名(Filename) -> 意图(ID)
+filename_to_id() {
+    local fname="$1"
+    case "$fname" in
+        geosite-geolocation-\!cn) echo "geositenoncn" ;;
+        geosite-*)                echo "geosite${fname#geosite-}" ;;
+        geoip-*)                  echo "geoip${fname#geoip-}" ;;
+        *)                        echo "$fname" ;;
+    esac
 }
