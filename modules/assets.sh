@@ -1,6 +1,6 @@
 #!/bin/sh
-# --- [ HPPC Module: 物资代官 (Assets) v3.2 Stable ] ---
-# 职责：规则集下载、MD5 增量更新、备份回滚、战报通知
+# --- [ HPPC Module: 物资代官 (Assets) v3.5 智能按需版 ] ---
+# 职责：规则集下载、内存级MD5增量更新、备份回滚、战报通知、批量申领
 # 修复：增加重启后的网络等待时间 (Sleep)，确保 TG 通知不丢失
 
 source /etc/hppc/hppc.conf
@@ -70,6 +70,47 @@ fetch_to_temp() {
 # ----------------------------------------------------------
 # 2. 核心功能
 # ----------------------------------------------------------
+
+# [新增] 批量申领逻辑 (The Fulfillment) - 供 Synthesize 专用
+fetch_list() {
+    local req_file="$1"
+    local success_file="/tmp/hp_assets.success"
+    echo -n > "$success_file"
+
+    log_info "代官收到物资申领单，开始核对库存与采购..."
+    
+    while read -r name; do
+        [ -z "$name" ] && continue
+        local final_path="$RULE_DIR/$name.srs"
+        local temp_path="/tmp/${name}.srs.tmp" # 在 RAM 中操作，不伤闪存
+        
+        if fetch_to_temp "$name" "$temp_path" >/dev/null; then
+            if [ -f "$final_path" ]; then
+                local old_md5=$(md5sum "$final_path" | awk '{print $1}')
+                local new_md5=$(md5sum "$temp_path" | awk '{print $1}')
+                if [ "$old_md5" != "$new_md5" ]; then
+                    mv "$temp_path" "$final_path"
+                    log_info "📦 物资翻新: $name"
+                else
+                    rm -f "$temp_path"
+                fi
+            else
+                mv "$temp_path" "$final_path"
+                log_success "📦 物资入库: $name"
+            fi
+            echo "$name" >> "$success_file"
+        else
+            # 下载失败时的降级防线
+            if [ -f "$final_path" ]; then
+                log_warn "⚠️ 物资 [$name] 采购失败，启用本地陈旧库存维持运转。"
+                echo "$name" >> "$success_file"
+            else
+                log_err "❌ 致命断供: 物资 [$name] 彻底获取失败！"
+            fi
+        fi
+    done < "$req_file"
+}
+
 download_manual() {
     local name="$1"
     local final_path="$RULE_DIR/$name.srs"
@@ -93,6 +134,7 @@ download_manual() {
 }
 
 resolve_deps() {
+    # 兼容老版直接扫描的 fallback 逻辑
     local config_file="$1"
     log_info "代官正在核对物资清单..."
     grep "option path" "$config_file" | awk -F"'" '{print $2}' | sort | uniq | while read -r file_path; do
@@ -170,34 +212,22 @@ update_all() {
         rm -rf "$TEMP_DIR"
     else
         log_info "准备应用 $update_count 个更新..."
-        
-        # [步骤 A] 备份旧规则
         backup_rules
-        
-        # [步骤 B] 覆盖新规则
         cp -f "$TEMP_DIR"/*.srs "$RULE_DIR"/ 2>/dev/null
         rm -rf "$TEMP_DIR"
         
-        # [步骤 C] 重启服务 (仅 Auto 模式)
         if [ "$mode" == "auto" ]; then
             log_info "触发自动重启 HomeProxy..."
             if /etc/init.d/homeproxy restart; then
                 status_msg="%0A♻️ 服务自动重启: <b>成功</b>"
                 log_success "服务重启成功。"
-                
-                # [关键修复] 强制等待 20秒，确保代理网络完全恢复后再发通知
                 log_info "等待网络防线稳固 (20s)..."
                 sleep 20
-                
             else
                 log_err "服务启动失败！正在执行自动回滚..."
-                
-                # [步骤 D] 紧急回滚
                 restore_rules
-                
                 if /etc/init.d/homeproxy restart; then
                     status_msg="%0A🛡️ 重启失败，已<b>自动回滚</b>并恢复服务。"
-                    # 回滚后也要等待
                     sleep 10
                 else
                     status_msg="%0A💀 严重: 回滚后重启仍失败！"
@@ -212,29 +242,26 @@ update_all() {
     if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
         local msg="🏰 <b>[${LOCATION}] 典籍修缮报告</b>%0A"
         msg="${msg}--------------------------------%0A"
-        
         if [ "$update_count" -gt 0 ]; then
             msg="${msg}📦 变更数量: <b>$update_count</b>%0A"
             msg="${msg}📝 变更清单: ${change_log}%0A"
         else
             msg="${msg}✅ 所有规则集均为最新版本。%0A"
         fi
-        
         if [ "$fail_count" -gt 0 ]; then
             msg="${msg}🚫 失败数量: <b>$fail_count</b>%0A"
         fi
-        
         msg="${msg}${status_msg}"
-        
         curl -sk -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
             -d "chat_id=$TG_CHAT_ID" -d "parse_mode=HTML" -d "text=$msg" > /dev/null 2>&1
     fi
 }
 
 case "$1" in
+    --fetch-list) fetch_list "$2" ;;
     --resolve) resolve_deps "$2" ;;
     --update)  update_all "$2" ;;
     --download) download_manual "$2" ;;
     --restore) restore_rules ;;
-    *) echo "Usage: $0 {--resolve | --update [auto] | --download | --restore}" ;;
+    *) echo "Usage: $0 {--fetch-list <file> | --resolve | --update [auto] | --download | --restore}" ;;
 esac
