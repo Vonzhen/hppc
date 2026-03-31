@@ -29,7 +29,7 @@ id_to_filename() {
     case "$id" in
         # --- [特殊别名录入区] ---
         geositenoncn)    echo "geosite-geolocation-!cn" ;;
-        geositeadsall)   echo "geosite-category-ads-all" ;;
+        geositecategoryadsall)   echo "geosite-category-ads-all" ;;
         geositehineteca) echo "geosite-hinet-eca" ;;
         # --- [通用规则区] ---
         geosite*)        echo "geosite-${id#geosite}" ;;
@@ -44,7 +44,7 @@ filename_to_id() {
     case "$fname" in
         # --- [特殊别名录入区] ---
         geosite-geolocation-\!cn) echo "geositenoncn" ;;
-        geosite-category-ads-all) echo "geositeadsall" ;;
+        geosite-category-ads-all) echo "geositecategoryadsall" ;;
         geosite-hinet-eca)        echo "geositehineteca" ;;
         # --- [通用规则区] ---
         geosite-*)                echo "geosite${fname#geosite-}" ;;
