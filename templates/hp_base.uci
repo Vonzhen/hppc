@@ -78,6 +78,7 @@ config dns_rule 'LocalDNS'
     option server 'paopaodns'
     option domain_strategy 'ipv4_only'
     list rule_set 'geositecn'
+    list rule_set 'geositeprivatedirect'
 
 config dns_rule 'Apple'
     option label 'Apple'
