@@ -25,6 +25,11 @@ config homeproxy 'config'
     option ipv6_support '1'
     option log_level 'warn'
 
+config experimental 'experimental'
+    option clash_api_port '9090'
+    option clash_api_secret 'vonzhen123'
+    option clash_api_log_level 'info'
+
 config homeproxy 'control'
     option lan_proxy_mode 'disabled'
     list wan_proxy_ipv4_ips '91.105.192.0/23'
