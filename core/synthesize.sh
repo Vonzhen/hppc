@@ -307,8 +307,6 @@ fi
 if [ "$SETTING_AUTO_RELOAD" = "1" ]; then
     log_info "接领主谕旨，正在唤醒结界 (Auto Reloading Service)..."
     if /etc/init.d/homeproxy reload; then
-        log_info "结界正在重塑，渡鸦已在塔楼就绪，等待风暴平息 (等待网络恢复)..."
-        sleep 20
         tg_send "${msg}%0A%0A⚔️ <b>结界状态:</b> <i>自动重启成功，长城已上线新防线。</i>"
     else
         tg_send "${msg}%0A%0A🔥 <b>结界状态:</b> <i>自动重启失败！请领主速速查看。</i>"
