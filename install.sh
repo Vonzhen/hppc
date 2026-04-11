@@ -99,11 +99,20 @@ fi
 
 # [4] 调拨物资 (Assets Fetching)
 download_asset() {
-    # 引导期因证书链可能尚未生效，暂保留不校验，但仅限自举拉取
-    wget --no-check-certificate -qO "$1" "$GH_BASE_URL/$2" && chmod +x "$1"
+    local target_path="$1"
+    local repo_path="$2"
+    # 打印透明账本明细
+    echo -e "   - 📥 \033[36m换装\033[0m: $repo_path"
+    
+    # 执行下载并赋予执行权限
+    if ! wget --no-check-certificate -qO "$target_path" "$GH_BASE_URL/$repo_path"; then
+        log_err "物资调拨失败: $repo_path"
+        exit 1
+    fi
+    chmod +x "$target_path"
 }
 
-log "正在从铁金库调配战略物资..."
+log "正在从铁金库调配核心战略物资 (Core & Modules)..."
 download_asset "/usr/share/hppc/core/synthesize.sh" "core/synthesize.sh"
 download_asset "/usr/share/hppc/core/fetch.sh"      "core/fetch.sh"
 download_asset "/usr/share/hppc/core/daemon.sh"     "core/daemon.sh"
