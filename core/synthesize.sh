@@ -207,7 +207,7 @@ echo "$JSON_DATA" | jq -c '.[]' | while read -r row; do
     LABEL=$(echo "$row" | jq -r '.tag')
     ID=$(echo -n "$LABEL" | md5sum | awk '{print $1}')
     TYPE=$(echo "$row" | jq -r '.type')
-    SNIP="$DIR_TEMPLATES/${TYPE}.uci"
+    SNIP="$DIR_TEMPLATES/models/${TYPE}.uci"
     
     if [ -f "$SNIP" ]; then
         SERVER=$(echo "$row" | jq -r '.server')
