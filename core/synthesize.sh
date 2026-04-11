@@ -1,24 +1,29 @@
 #!/bin/sh
-# --- [ HPPC Core: 炼金术士 (Synthesize) v3.5 智能按需版 ] ---
-# 职责：解析意图 -> 批量申领 -> 安全熔断 -> 动态铸造 -> 战报通报
+# --- [ HPPC Core: 炼金术士的熔炉 (Synthesize) v4.0 事务安全版 ] ---
+# 职能：解析战术意图 -> 批量申领军械 -> 触发安全熔断 -> 隔离区动态铸造 -> 原子级替换 -> 战报通报
+# 架构：PREPARE (生成) -> VERIFY (校验) -> COMMIT (原子替换) -> RELOAD (按需重启)
 
-source /etc/hppc/hppc.conf
-source /usr/share/hppc/lib/utils.sh
-
-# 资源路径
-TMP_BASE="/tmp/hp_base.uci"
-TMP_NODES="/tmp/hp_nodes.uci"
-TMP_GROUPS="/tmp/hp_groups.uci"
-TMP_RULES="/tmp/hp_rules.uci"     # 新增：动态生成的规则集配置
-REQ_LIST="/tmp/hp_assets.req"     # 新增：申领清单
-SUCCESS_LIST="/tmp/hp_assets.success" 
-FINAL_CONF="/etc/config/homeproxy"
-TEMPLATE_DIR="/usr/share/hppc/templates/models"
-COUNT_FILE="/tmp/hp_counts"
-MODULE_ASSETS="/usr/share/hppc/modules/assets.sh"
+. /etc/hppc/hppc.conf
+. /usr/share/hppc/lib/utils.sh
 
 # ==========================================
-# 1. 核心算法：意图平移 (The Strategy Shift)
+# Category A: 事务工作区与资源常量定义
+# ==========================================
+# 隔离工作区 (Workspace)
+TMP_BASE="$DIR_TMP/hp_base.uci"
+TMP_NODES="$DIR_TMP/hp_nodes.uci"
+TMP_GROUPS="$DIR_TMP/hp_groups.uci"
+TMP_RULES="$DIR_TMP/hp_rules.uci"
+REQ_LIST="$DIR_TMP/hp_assets.req"
+COUNT_FILE="$DIR_TMP/hp_counts"
+
+# 中间态验证文件与生产文件
+FILE_NEXT_CONF="$DIR_TMP/homeproxy"
+SUCCESS_LIST="/tmp/hp_assets.success" 
+
+# ==========================================
+# [第一阶段] 战术意图沙盘推演 (Logic Mapping)
+# 警告：此算法涉及核心路由流转，严禁篡改
 # ==========================================
 map_logic() {
     local val=$(echo "$1" | tr -d "' \t\r\n")
@@ -49,23 +54,17 @@ map_logic() {
 }
 
 # ==========================================
-# 主流程 (The Grand Process)
+# [第二阶段] 检阅兵力与战术重塑 (Data Extraction)
 # ==========================================
 
 echo -n > "$TMP_NODES"
 echo -n > "$TMP_GROUPS"
 echo -n > "$TMP_RULES"
 
-# --- 检阅兵力 (Counting) ---
-log_info "正在检阅各家族兵力..."
-if ! command -v jq >/dev/null 2>&1; then
-    log_err "缺少翻译官 (jq)，请执行 opkg install jq"
-    exit 1
-fi
-
-JSON_FILE="/tmp/hppc_nodes.json"
+log_info "正在检阅各家族兵力 (Counting Nodes)..."
+JSON_FILE="$DIR_TMP/hppc_nodes.json"
 if [ ! -f "$JSON_FILE" ]; then
-    log_err "没有找到节点情报 ($JSON_FILE)，请先执行 '集结' (Fetch)。"
+    log_err "未发现斥候情报 ($JSON_FILE)，请先执行 '集结' (Fetch)。"
     exit 1
 fi
 
@@ -85,12 +84,11 @@ for reg in $REGIONS; do
     echo "${lower_reg}=${count}" >> "$COUNT_FILE"
 done
 
-# --- 重塑战术意图 (Mapping) ---
-log_info "正在重塑战术意图 (Hp_Base)..."
-BASE_TEMPLATE="/usr/share/hppc/templates/hp_base.uci"
+log_info "正在重塑战术意图 (Rendering Hp_Base)..."
+BASE_TEMPLATE="$DIR_TEMPLATES/hp_base.uci"
 
 if [ ! -f "$BASE_TEMPLATE" ]; then
-    log_err "战术蓝图缺失 ($BASE_TEMPLATE)，请升级脚本。"
+    log_err "战术蓝图缺失 ($BASE_TEMPLATE)，防线崩塌。"
     exit 1
 fi
 
@@ -113,28 +111,24 @@ done < "$TMP_BASE.raw"
 rm "$TMP_BASE.raw"
 
 # ==========================================
-# [全新阶段] 意图感知与物资申领 (Requisition)
+# [第三阶段] 军需调拨与熔断防御 (Asset Requisition)
 # ==========================================
-log_info "正在扫描战术意图，签发物资申领单..."
-grep "list rule_set" "$TMP_BASE" | awk -F"'" '{print $2}' | awk '!x[$0]++' > "/tmp/hp_assets_id.list"
+log_info "正在扫描战术意图，签发军械申领单..."
+grep "list rule_set" "$TMP_BASE" | awk -F"'" '{print $2}' | awk '!x[$0]++' > "$DIR_TMP/hp_assets_id.list"
 
 echo -n > "$REQ_LIST"
 while read -r id; do
     [ -n "$id" ] && id_to_filename "$id" >> "$REQ_LIST"
-done < "/tmp/hp_assets_id.list"
+done < "$DIR_TMP/hp_assets_id.list"
 
-if [ -f "$MODULE_ASSETS" ]; then
-    sh "$MODULE_ASSETS" --fetch-list "$REQ_LIST"
+if [ -f "$DIR_MODULES/assets.sh" ]; then
+    sh "$DIR_MODULES/assets.sh" --fetch-list "$REQ_LIST"
 else
-    log_err "物资代官 (Assets) 擅离职守，防线铸造中止！"
+    log_err "军需代官 (assets.sh) 擅离职守，防线铸造中止！"
     exit 1
 fi
 
-# ==========================================
-# [全新阶段] 安全熔断与动态铸造 (Dynamic Casting)
-# ==========================================
-log_info "正在执行动态铸造与安全熔断排查..."
-
+log_info "正在排查军需战损，触发安全熔断 (Circuit Breaker)..."
 SUCCESS_IDS=" "
 if [ -f "$SUCCESS_LIST" ]; then
     while read -r fname; do
@@ -146,7 +140,7 @@ mv "$TMP_BASE" "$TMP_BASE.raw2"
 echo -n > "$TMP_BASE"
 MISSING_COUNT=0
 
-# 1. 熔断剔除
+# 熔断剔除 (Pruning failed rulesets)
 while IFS= read -r line; do
     if echo "$line" | grep -q "list rule_set"; then
         id=$(echo "$line" | awk -F"'" '{print $2}')
@@ -162,7 +156,10 @@ while IFS= read -r line; do
 done < "$TMP_BASE.raw2"
 rm "$TMP_BASE.raw2"
 
-# 2. 动态铸造
+# ==========================================
+# [第四阶段] 瓦雷利亚钢动态锻造 (Dynamic Node Casting)
+# ==========================================
+# 铸造规则集
 for id in $SUCCESS_IDS; do
     [ -z "$id" ] && continue
     fname=$(id_to_filename "$id")
@@ -181,8 +178,7 @@ for id in $SUCCESS_IDS; do
     } >> "$TMP_RULES"
 done
 
-# --- 组建固定编制战队 ---
-log_info "正在组建固定编制战队..."
+log_info "正在组建固定编制战队 (Routing Groups)..."
 for reg in $REGIONS; do
     idx=1
     lower_reg=$(echo "$reg" | tr 'A-Z' 'a-z')
@@ -210,13 +206,12 @@ for reg in $REGIONS; do
     done
 done
 
-# --- 注入瓦雷利亚节点 ---
-log_info "正在注入瓦雷利亚节点 (智能映射模式)..."
+log_info "正在注入瓦雷利亚兵团 (Injecting Proxy Nodes)..."
 echo "$JSON_DATA" | jq -c '.[]' | while read -r row; do
     LABEL=$(echo "$row" | jq -r '.tag')
     ID=$(echo -n "$LABEL" | md5sum | awk '{print $1}')
     TYPE=$(echo "$row" | jq -r '.type')
-    SNIP="$TEMPLATE_DIR/${TYPE}.uci"
+    SNIP="$DIR_TEMPLATES/${TYPE}.uci"
     
     if [ -f "$SNIP" ]; then
         SERVER=$(echo "$row" | jq -r '.server')
@@ -268,35 +263,60 @@ echo "$JSON_DATA" | jq -c '.[]' | while read -r row; do
     fi
 done
 
-# --- 最终合并与战报通报 ---
+# ==========================================
+# [第五阶段] 誓言约束与结界替换 (Transaction State Machine)
+# ==========================================
+log_info "正在将所有部队集结至隔离营地 (Prepare Transaction)..."
 if [ -s "$TMP_BASE" ] && [ -s "$TMP_NODES" ]; then
-    # 严格按照层级组合配置：基础意图 -> 动态规则集 -> 固定编制战队 -> 具体兵源节点
-    cat "$TMP_BASE" "$TMP_RULES" "$TMP_GROUPS" "$TMP_NODES" > "$FINAL_CONF"
+    cat "$TMP_BASE" "$TMP_RULES" "$TMP_GROUPS" "$TMP_NODES" > "$FILE_NEXT_CONF"
 else
-    log_err "熔炼材料缺失，中止合并！"
+    log_err "熔炼材料缺失，防线不可摧毁，停止事务！"
     exit 1
 fi
 
-if [ -s "$FINAL_CONF" ]; then
-    cp "$FINAL_CONF" "/etc/config/homeproxy.bak"
-    log_success "配置熔炼完成 (新配置已就绪)。"
-    
-    stats=$(cat $COUNT_FILE | tr '\n' ' ' | sed 's/=$//')
-    rand=$(hexdump -n 1 -e '/1 "%u"' /dev/urandom)
-    case $((rand % 5)) in
-        0) msg="🕯️ 报告领主，【$LOCATION】城墙蓝图已重绘。瓦雷利亚钢已熔炼完毕。" ;;
-        1) msg="🦅 渡鸦传信：【$LOCATION】新阵型演练完成。预备守军分布：$stats" ;;
-        2) msg="🍷 领主大人，【$LOCATION】的新装备已入库，随时可以换装！" ;;
-        3) msg="❄️ 凛冬将至，但【$LOCATION】的炉火正旺。新配置已生成，静候指令。" ;;
-        4) msg="🐉 龙焰重铸！【$LOCATION】积木已归位，只待您一声令下！" ;;
-    esac
-    
-    if [ "$MISSING_COUNT" -gt 0 ]; then
-        msg="${msg}%0A%0A⚠️ <b>战损警报:</b> <i>发现 $MISSING_COUNT 个无效规则集，已执行战术熔断（剔除），系统基础运行不受影响。</i>"
-    fi
-    
-    tg_send "${msg}%0A%0A⚔️ <b>指令:</b> <i>语法检阅通过，请择机手动重启防线。</i>"
-else
-    log_err "熔炼失败 (生成结果为空)！"
+log_info "学士正在校验新法阵的符文语法 (UCI Syntax Verification)..."
+# 使用 OpenWrt 原生命令校验位于 /tmp 工作区的文件
+if ! uci -q -c "$DIR_TMP" show homeproxy >/dev/null 2>&1; then
+    log_err "符文语法错误 (UCI Syntax Validation Failed)！放弃部署，旧阵型维持不变。"
     exit 1
 fi
+
+log_info "校验通过！正在执行无缝替换 (Atomic Commit)..."
+cp "$FILE_CONF_PROD" "${FILE_CONF_PROD}.bak" 2>/dev/null
+if mv "$FILE_NEXT_CONF" "$FILE_CONF_PROD"; then
+    log_success "配置熔炼与替换完成。"
+else
+    log_err "城墙土石崩塌 (文件系统异常)，替换失败！正在紧急回滚..."
+    mv "${FILE_CONF_PROD}.bak" "$FILE_CONF_PROD" 2>/dev/null
+    exit 1
+fi
+
+# ==========================================
+# [第六阶段] 渡鸦战报与号令流转 (Notification & Reload)
+# ==========================================
+stats=$(cat $COUNT_FILE | tr '\n' ' ' | sed 's/=$//')
+rand=$(hexdump -n 1 -e '/1 "%u"' /dev/urandom)
+case $((rand % 5)) in
+    0) msg="🕯️ 报告领主，【$LOCATION】城墙蓝图已重绘。瓦雷利亚钢已熔炼完毕。" ;;
+    1) msg="🦅 渡鸦传信：【$LOCATION】新阵型演练完成。预备守军分布：$stats" ;;
+    2) msg="🍷 领主大人，【$LOCATION】的新装备已入库，随时可以换装！" ;;
+    3) msg="❄️ 凛冬将至，但【$LOCATION】的炉火正旺。新配置已生成，静候指令。" ;;
+    4) msg="🐉 龙焰重铸！【$LOCATION】积木已归位，只待您一声令下！" ;;
+esac
+
+if [ "$MISSING_COUNT" -gt 0 ]; then
+    msg="${msg}%0A%0A⚠️ <b>战损警报:</b> <i>发现 $MISSING_COUNT 个无效军械，已执行战术熔断（剔除），绝境长城基础防御不受影响。</i>"
+fi
+
+if [ "$SETTING_AUTO_RELOAD" = "1" ]; then
+    log_info "接领主谕旨，正在唤醒结界 (Auto Reloading Service)..."
+    if /etc/init.d/homeproxy reload; then
+        tg_send "${msg}%0A%0A⚔️ <b>结界状态:</b> <i>自动重启成功，长城已上线新防线。</i>"
+    else
+        tg_send "${msg}%0A%0A🔥 <b>结界状态:</b> <i>自动重启失败！请领主速速查看。</i>"
+    fi
+else
+    tg_send "${msg}%0A%0A⚔️ <b>指令:</b> <i>系统处于静默待命状态，请择机【手动重启】防线。</i>"
+fi
+
+exit 0
