@@ -47,8 +47,8 @@ tg_send() {
     local msg="$1"
     local curl_opts="-s -X POST"
     [ "$SETTING_INSECURE_SKIP_VERIFY" = "1" ] && curl_opts="$curl_opts -k"
-    curl $curl_opts "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
-        -d "chat_id=$TG_CHAT_ID" -d "parse_mode=HTML" -d "text=$msg" > /dev/null 2>&1 &
+    curl -sL --connect-timeout 10 $curl_opts "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
+        -d "chat_id=$TG_CHAT_ID" -d "parse_mode=HTML" -d "text=$msg" > /dev/null 2>&1
 }
 
 # 意图(ID) -> 物资名(Filename)
