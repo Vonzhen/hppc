@@ -1,151 +1,182 @@
 #!/bin/sh
-# --- [ HPPC v2.2: Castellan Installer (Fixed) ] ---
-# 职责：环境预检、交互配置、模块装配、哨兵注册
-# 修复：Wget SSL 问题、Crontab 自动模式参数
+# --- [ HPPC: 系统部署向导 (Installer) v3.6 ] ---
+# 职责：环境预检、交互式配置、核心组件拉取、定时任务注册
+# 修复：P0级函数未定义崩溃、增强依赖检查、强制下载校验、全面 POSIX 兼容
 
-RED='\033[31m'; GREEN='\033[32m'; YELLOW='\033[33m'; BLUE='\033[36m'; NC='\033[0m'
-log() { echo -e "${BLUE}[工兵]${NC} $1"; }
+# ==========================================
+# 本地日志系统 (独立于 utils.sh，保障前置安全)
+# ==========================================
+C_ERR='\033[31m'; C_OK='\033[32m'; C_WARN='\033[33m'; C_INFO='\033[36m'; C_RESET='\033[0m'
+
+log_info()    { printf "${C_INFO}[INFO]${C_RESET} %s\n" "$1"; }
+log_success() { printf "${C_OK}[SUCCESS]${C_RESET} %s\n" "$1"; }
+log_warn()    { printf "${C_WARN}[WARN]${C_RESET} %s\n" "$1"; }
+log_err()     { printf "${C_ERR}[ERROR]${C_RESET} %s\n" "$1"; }
 
 CONF_FILE="/etc/hppc/hppc.conf"
-# ⚠️ 请修改您的 GitHub 用户名
+
+# ⚠️ 仓库配置区
 GH_USER="Vonzhen"
 GH_REPO="hppc"
 GH_BRANCH="master"
 GH_BASE_URL="https://raw.githubusercontent.com/$GH_USER/$GH_REPO/$GH_BRANCH"
 
-echo -e "\n🏰 \033[1;33mHPPC Castellan - 要塞指挥系统 v2.2 (Fix)\033[0m\n"
+printf "\n🔧 \033[1;33mHPPC - 高级路由控制编排系统 v3.6 部署向导\033[0m\n\n"
 
-# [1] 征兵体检 (Pre-flight Check)
-log "正在执行环境预检..."
+# ==========================================
+# 1. 环境依赖预检 (Pre-flight Check)
+# ==========================================
+log_info "正在执行环境依赖预检..."
 PACKAGES=""
 ! command -v curl >/dev/null && PACKAGES="$PACKAGES curl"
 ! command -v jq >/dev/null   && PACKAGES="$PACKAGES jq"
 ! command -v openssl >/dev/null && PACKAGES="$PACKAGES openssl-util"
-# [修复] 增加 SSL 根证书依赖检查
-if ! opkg list-installed | grep -q "ca-bundle" && ! opkg list-installed | grep -q "ca-certificates"; then
+
+# 检查根证书依赖，防止 API 请求 SSL 失败
+if ! opkg list-installed 2>/dev/null | grep -q "ca-bundle" && ! opkg list-installed 2>/dev/null | grep -q "ca-certificates"; then
     PACKAGES="$PACKAGES ca-bundle"
 fi
 
 if [ -n "$PACKAGES" ]; then
-    echo -e "${YELLOW}>> 发现缺失依赖: $PACKAGES，正在征召...${NC}"
-    # [修复] 尝试安装 ca-bundle，如果失败尝试 ca-certificates
+    log_warn "发现缺失依赖: $PACKAGES，正在自动安装..."
     opkg update
     if ! opkg install $PACKAGES; then
+        # 针对部分老旧 OpenWrt 源的 fallback
         opkg install ca-certificates 2>/dev/null
     fi
     
     if [ $? -ne 0 ]; then
-        echo -e "${RED}❌ 依赖安装失败，请检查网络或软件源。${NC}"; exit 1
+        log_err "依赖安装失败！请检查系统网络连通性或 opkg 软件源配置。"
+        exit 1
     fi
 else
-    echo -e "${GREEN}>> 环境健康，准予通行。${NC}"
+    log_success "基础环境健康，准予通行。"
 fi
 
-# [2] 清理与重建
+# ==========================================
+# 2. 目录初始化
+# ==========================================
 [ -d "/usr/share/hppc" ] && rm -rf /usr/share/hppc
 mkdir -p /etc/hppc /tmp/hppc
 mkdir -p /usr/share/hppc/core /usr/share/hppc/lib /usr/share/hppc/bin /usr/share/hppc/modules
 mkdir -p /usr/share/hppc/templates/models
 
-# [3] 宣誓仪式 (配置)
+# ==========================================
+# 3. 交互式参数配置
+# ==========================================
 if [ -f "$CONF_FILE" ]; then
-    source "$CONF_FILE"
-    log "🏮 发现旧誓言，【$LOCATION】要塞保留原配置..."
+    . "$CONF_FILE"
+    log_success "检测到现有配置文件，节点 [${LOCATION:-未命名}] 将保留历史设置..."
 else
     echo "------------------------------------------------"
-    # 3.1 命名
-    printf "${YELLOW}1. 赐名 (Location)${NC} [Winterfell]: "; read -r LOC_INPUT
-    LOCATION="${LOC_INPUT:-Winterfell}"
+    # 3.1 节点标识
+    printf "${C_WARN}1. 节点展示名称 (Location)${C_RESET} [HomeProxy]: "
+    read -r LOC_INPUT
+    LOCATION="${LOC_INPUT:-HomeProxy}"
 
-    # 3.2 学城
-    printf "${YELLOW}2. 学城域名 (Worker)${NC} [hppc.x.workers.dev]: "; read -r CF_DOMAIN
+    # 3.2 代理 API
+    printf "${C_WARN}2. Worker 代理域名 (CF Domain)${C_RESET} [hppc.x.workers.dev]: "
+    read -r CF_DOMAIN
 
-    # 3.3 信物
-    printf "${YELLOW}3. 验证信物 (Token)${NC}: "; read -r CF_TOKEN
+    # 3.3 鉴权密钥
+    printf "${C_WARN}3. 数据请求验证码 (Token)${C_RESET}: "
+    read -r CF_TOKEN
 
-    # 3.4 渡鸦
-    printf "${YELLOW}4. 渡鸦 Token (TG)${NC} [回车跳过]: "; read -r TG_TOKEN
-    printf "${YELLOW}   渡鸦 ChatID (TG)${NC} [回车跳过]: "; read -r TG_ID
+    # 3.4 告警通道
+    printf "${C_WARN}4. Telegram Bot Token${C_RESET} [回车跳过]: "
+    read -r TG_TOKEN
+    printf "${C_WARN}   Telegram Chat ID${C_RESET} [回车跳过]: "
+    read -r TG_ID
 
-    # 3.5 私有军械库
-    echo -e "${YELLOW}5. 私有规则源 (Private Rules Repo)${NC}"
-    echo "   (例如: https://raw.githubusercontent.com/Me/rules/main)"
-    printf "   请输入 [回车跳过]: "; read -r ASSETS_REPO
+    # 3.5 规则集源
+    printf "${C_WARN}5. 私有规则集加速源 (Private Assets Repo URL)${C_RESET}\n"
+    printf "   (示例: https://testingcf.jsdelivr.net/gh/User/rules@master/rules)\n"
+    printf "   请输入 [回车跳过]: "
+    read -r ASSETS_REPO
     echo "------------------------------------------------"
 
-    # 刻录
-    {
-        echo "# --- HPPC: Castellan's Oath ---"
-        echo "GH_RAW_URL='$GH_BASE_URL'"
-        echo "CF_DOMAIN='$CF_DOMAIN'"
-        echo "CF_TOKEN='$CF_TOKEN'"
-        echo "TG_BOT_TOKEN='$TG_TOKEN'"
-        echo "TG_CHAT_ID='$TG_ID'"
-        echo "LOCATION='$LOCATION'"
-        echo "ASSETS_PRIVATE_REPO='$ASSETS_REPO'"
-    } > "$CONF_FILE"
+    # 写入配置 (原子操作保护)
+    cat > "$CONF_FILE.tmp" <<EOF
+# --- HPPC 系统环境变量 ---
+GH_RAW_URL='$GH_BASE_URL'
+CF_DOMAIN='$CF_DOMAIN'
+CF_TOKEN='$CF_TOKEN'
+TG_BOT_TOKEN='$TG_TOKEN'
+TG_CHAT_ID='$TG_ID'
+LOCATION='$LOCATION'
+ASSETS_PRIVATE_REPO='$ASSETS_REPO'
+EOF
+    mv "$CONF_FILE.tmp" "$CONF_FILE"
     chmod 600 "$CONF_FILE"
 fi
 
-# [4] 调拨物资
+# ==========================================
+# 4. 核心组件获取 (带严格失败熔断)
+# ==========================================
 download_asset() {
-    # 统一使用带有 SSL 忽略的 wget
-    wget --no-check-certificate -qO "$1" "$GH_BASE_URL/$2" && chmod +x "$1"
+    local dest="$1"
+    local src="$2"
+    if curl -sLk --connect-timeout 10 -f "$GH_BASE_URL/$src" -o "$dest"; then
+        chmod +x "$dest"
+        return 0
+    else
+        log_err "无法获取组件: $src"
+        return 1
+    fi
 }
 
-log "正在调配战略物资..."
-# Core
-download_asset "/usr/share/hppc/core/synthesize.sh" "core/synthesize.sh"
-download_asset "/usr/share/hppc/core/fetch.sh"      "core/fetch.sh"
-download_asset "/usr/share/hppc/core/daemon.sh"     "core/daemon.sh"
-download_asset "/usr/share/hppc/core/rollback.sh"   "core/rollback.sh"
-# Lib & Modules (Assets)
-download_asset "/usr/share/hppc/lib/utils.sh"       "lib/utils.sh"
-download_asset "/usr/share/hppc/modules/assets.sh"  "modules/assets.sh"
-# Bin
-download_asset "/usr/share/hppc/bin/cli.sh"         "bin/cli.sh"
-# Templates Base
-download_asset "/usr/share/hppc/templates/hp_base.uci" "templates/hp_base.uci"
+log_info "正在拉取核心业务组件..."
 
-# --- 智能模具下载逻辑 (Smart Sync) ---
-log "正在同步最新兵器模具 (Smart Sync)..."
-# 1. 构建 API 请求地址
+download_asset "/usr/share/hppc/core/synthesize.sh" "core/synthesize.sh" || exit 1
+download_asset "/usr/share/hppc/core/fetch.sh"      "core/fetch.sh" || exit 1
+download_asset "/usr/share/hppc/core/daemon.sh"     "core/daemon.sh" || exit 1
+download_asset "/usr/share/hppc/core/rollback.sh"   "core/rollback.sh" || exit 1
+
+download_asset "/usr/share/hppc/lib/utils.sh"       "lib/utils.sh" || exit 1
+download_asset "/usr/share/hppc/modules/assets.sh"  "modules/assets.sh" || exit 1
+
+download_asset "/usr/share/hppc/bin/cli.sh"         "bin/cli.sh" || exit 1
+download_asset "/usr/share/hppc/templates/hp_base.uci" "templates/hp_base.uci" || exit 1
+
+# --- 智能模板同步 (Smart Sync) ---
+log_info "正在同步节点协议模板 (Smart Sync)..."
 API_URL="https://api.github.com/repos/$GH_USER/$GH_REPO/contents/templates/models?ref=$GH_BRANCH"
 
-# 2. 询问学城 (GitHub API) 目录下有哪些文件
-# 增加 -k 参数忽略 curl 证书校验，增加 timeout 防止阻塞
+# 解析 GitHub API 获取文件列表
 TEMPLATE_LIST=$(curl -skL --connect-timeout 10 "$API_URL" | jq -r '.[].name' 2>/dev/null)
 
 if [ -n "$TEMPLATE_LIST" ] && [ "$TEMPLATE_LIST" != "null" ]; then
-    # 3. 清理旧模具 (防止改名后残留僵尸文件)
     rm -f /usr/share/hppc/templates/models/*.uci
-    
-    # 4. 动态遍历下载 (复用 download_asset 函数)
     for uci_file in $TEMPLATE_LIST; do
         if echo "$uci_file" | grep -q "\.uci$"; then
-            echo "   - 获取模具: $uci_file"
+            printf "   - 同步模板: %s\n" "$uci_file"
             download_asset "/usr/share/hppc/templates/models/$uci_file" "templates/models/$uci_file"
         fi
     done
 else
-    # [降级方案] 紧急备用清单
-    log_warn "API 连接受限，切换至紧急备用清单..."
+    log_warn "GitHub API 响应受限，切换至本地后备清单..."
     for p in vless trojan hysteria2 shadowsocks anytls tuic; do
         download_asset "/usr/share/hppc/templates/models/$p.uci" "templates/models/$p.uci"
     done
 fi
 
-# [5] 部署守夜人
+# ==========================================
+# 5. 系统注册与收尾
+# ==========================================
+log_info "正在注册全局命令与定时任务..."
+
+# 注册命令符号链接
 ln -sf /usr/share/hppc/bin/cli.sh /usr/bin/hppc
 
-# 注册 Crontab (Core: 1min, Assets: 07:30 Daily [Auto Mode])
+# 清理旧定时任务并写入新任务 (1分钟级守护 + 每日 07:30 规则资产更新)
 (crontab -l 2>/dev/null | grep -v "hppc" | grep -v "daemon.sh" | grep -v "assets.sh") | crontab -
 (crontab -l 2>/dev/null; \
  echo "* * * * * /usr/share/hppc/core/daemon.sh"; \
  echo "30 7 * * * /usr/share/hppc/modules/assets.sh --update auto") | crontab -
-# [注意] 上一行末尾增加了 'auto' 参数，这是实现每日自动重启的关键
 
-echo -e "\n${GREEN}✅ Castellan 系统部署完毕！${NC}"
-echo -e "指令：输入 ${YELLOW}hppc${NC} 进入指挥面板。"
-echo -e "提示：首次安装后，请运行 'hppc' -> '6) 部署 WebUI'。"
+printf "\n${C_OK}✅ HPPC 部署完毕！系统已准备就绪。${C_RESET}\n"
+printf "🔸 请在终端输入 ${C_WARN}hppc${C_RESET} 唤出系统控制面板。\n"
+printf "🔸 建议首次使用时，通过面板菜单执行 ${C_INFO}[6] 部署 WebUI${C_RESET}。\n"
+
+# 阅后即焚
 rm -f "$0"
