@@ -1,41 +1,39 @@
 #!/bin/sh
-# --- [ HPPC Core: 军需官 (Fetch) v2.2 Fixed ] ---
-# 职责：从学城拉取节点情报 (Endpoint: /fetch-nodes)
-# 修复：下载成功后自动同步时间戳，防止 Daemon 重复触发
+# --- [ HPPC Core: 节点获取 (Fetch) v3.6 ] ---
+# 职责：拉取远端节点 JSON (Endpoint: /fetch-nodes) 并校验格式
+# 修复：接入 safe_download 防线；强化 JSON 校验机制。
 
-source /etc/hppc/hppc.conf
-source /usr/share/hppc/lib/utils.sh
+. /etc/hppc/hppc.conf
+. /usr/share/hppc/lib/utils.sh
 
-TEMP_JSON="/tmp/nodes_download.json"
+TEMP_JSON="$HPPC_TMP_DIR/nodes_download.json"
 FINAL_JSON="/tmp/hppc_nodes.json"
 TICK_FILE="/etc/hppc/last_tick"
 
-log_info "正在派遣渡鸦前往学城 ($CF_DOMAIN) 获取补给..."
+mkdir -p "$HPPC_TMP_DIR"
 
-# 1. 下载 (Download)
-curl -skL --connect-timeout 15 "https://$CF_DOMAIN/fetch-nodes?token=$CF_TOKEN" -o "$TEMP_JSON"
+log_info "正在向远端节点库 ($CF_DOMAIN) 请求数据同步..."
 
-# 2. 验货 (Validation)
-if [ ! -s "$TEMP_JSON" ]; then
-    log_err "渡鸦空手而归 (下载为空)，请检查 Token 或学城状态。"
+# 1. 安全下载
+if ! safe_download "https://$CF_DOMAIN/fetch-nodes?token=$CF_TOKEN" "$TEMP_JSON"; then
+    log_err "节点数据获取失败，请检查网络连通性或 Token 权限。"
     exit 1
 fi
 
-if ! jq empty "$TEMP_JSON" 2>/dev/null; then
-    log_err "补给包已损坏 (JSON 格式错误)，丢弃。"
+# 2. 严格校验 (防止 HTML 错误页或残缺 JSON 破坏配置)
+if ! jq empty "$TEMP_JSON" >/dev/null 2>&1; then
+    log_err "节点数据损坏 (JSON 语法错误)，本次拉取作废。"
     rm -f "$TEMP_JSON"
     exit 1
 fi
 
-# 3. 入库 (Apply)
+# 3. 入库生效
 mv "$TEMP_JSON" "$FINAL_JSON"
 
-# [新增] 4. 同步时间戳 (Sync Tick)
-# 这一步是为了告诉后台哨兵：“我已经手动更新过了，你别再叫了”
+# 4. 同步时间戳防重发
 CURRENT_TICK=$(curl -skL --connect-timeout 5 "https://$CF_DOMAIN/tg-sync?token=$CF_TOKEN")
-if [ -n "$CURRENT_TICK" ] && [ "$CURRENT_TICK" -gt 0 ] 2>/dev/null; then
+if [ -n "$CURRENT_TICK" ] && [ "$CURRENT_TICK" != "Unauthorized" ]; then
     echo "$CURRENT_TICK" > "$TICK_FILE"
-    # log_info "版本号已同步: $CURRENT_TICK"
 fi
 
-log_success "节点补给已入库，等待熔炼。"
+log_success "最新节点数据已成功拉取并校验通过。"
