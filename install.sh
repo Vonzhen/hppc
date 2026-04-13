@@ -1,7 +1,7 @@
 #!/bin/sh
-# --- [ HPPC: 系统部署向导 (Installer) v3.6 ] ---
+# --- [ HPPC: 系统部署向导 (Installer) v3.6.1 ] ---
 # 职责：环境预检、交互式配置、核心组件拉取、定时任务注册
-# 修复：P0级函数未定义崩溃、增强依赖检查、强制下载校验、全面 POSIX 兼容
+# 完善：增加了拉取核心业务组件时的细粒度日志输出，提升更新透明度
 
 # ==========================================
 # 本地日志系统 (独立于 utils.sh，保障前置安全)
@@ -116,6 +116,8 @@ fi
 download_asset() {
     local dest="$1"
     local src="$2"
+    # [新增] 细粒度日志输出，提高更新过程的透明度
+    printf "   - 拉取组件: %s\n" "$src"
     if curl -sLk --connect-timeout 10 -f "$GH_BASE_URL/$src" -o "$dest"; then
         chmod +x "$dest"
         return 0
