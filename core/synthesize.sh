@@ -1,5 +1,5 @@
 #!/bin/sh
-# --- [ HPPC Core: 配置合成 (Synthesize) v3.6 智能按需版 ] ---
+# --- [ HPPC Core: 配置合成 (Synthesize) v3.6 智能按需版 (含 Vmess/WS) ] ---
 # 职责：解析路由策略 -> 生成规则申领单 -> 验证可用性熔断 -> 影子合并与自检 -> 状态通报
 
 source /etc/hppc/hppc.conf
@@ -242,6 +242,14 @@ echo "$JSON_DATA" | jq -c '.[]' | while read -r row; do
              PK=""; SID=""
         fi
 
+        # [新增] 专门为 Vmess 与 WebSocket 准备的字段提取
+        ALTER_ID=$(echo "$row" | jq -r '.alterId // 0')
+        CIPHER=$(echo "$row" | jq -r '.cipher // "auto"')
+        TRANSPORT=$(echo "$row" | jq -r '.network // "tcp"')
+        WS_PATH=$(echo "$row" | jq -r '."ws-opts".path // empty')
+        WS_HOST=$(echo "$row" | jq -r '."ws-opts".headers.Host // empty')
+
+        # 核心替换 (针对含斜杠的 WS_PATH 变量，采用 | 作为 sed 分隔符)
         cat "$SNIP" | sed \
             -e "s/{{ID}}/$ID/g" \
             -e "s/{{LABEL}}/$LABEL/g" \
@@ -260,6 +268,11 @@ echo "$JSON_DATA" | jq -c '.[]' | while read -r row; do
             -e "s/{{REALITY_ENABLE}}/$REALITY_ENABLE/g" \
             -e "s/{{REALITY_PK}}/$PK/g" \
             -e "s/{{REALITY_SID}}/$SID/g" \
+            -e "s|{{ALTER_ID}}|$ALTER_ID|g" \
+            -e "s|{{CIPHER}}|$CIPHER|g" \
+            -e "s|{{TRANSPORT}}|$TRANSPORT|g" \
+            -e "s|{{WS_HOST}}|$WS_HOST|g" \
+            -e "s|{{WS_PATH}}|$WS_PATH|g" \
             >> "$TMP_NODES"
             
         echo "" >> "$TMP_NODES"
@@ -285,9 +298,9 @@ if [ -s "$TMP_BASE" ] && [ -s "$TMP_NODES" ]; then
     if uci -q -c "$SHADOW_DIR" show homeproxy >/dev/null 2>&1; then
         log_success "✅ 语法自检通过，未发现关键逻辑损坏。"
         
-        # 3. 稳妥替换：先备份，后瞬间覆盖
+        # 3. 稳妥替换：先备份，后安全覆盖 (防 PermissionError Bug，必须用 cat)
         [ -f "$FINAL_CONF" ] && cp "$FINAL_CONF" "$FINAL_CONF.bak"
-        mv "$SHADOW_CONF" "$FINAL_CONF"
+        cat "$SHADOW_CONF" > "$FINAL_CONF"
         rm -rf "$SHADOW_DIR"
         log_success "✅ 配置文件已成功原子化替换。"
         
@@ -302,9 +315,8 @@ if [ -s "$TMP_BASE" ] && [ -s "$TMP_NODES" ]; then
             msg="${msg}%0A%0A⚠️ <b>依赖异常:</b> <i>发现 $MISSING_COUNT 个不可用规则集，触发熔断，已被自动跳过。</i>"
         fi
         
-        if command -v tg_send >/dev/null 2>&1; then
-             tg_send "${msg}%0A%0A🔄 <b>状态:</b> <i>自检通过，请择机触发重启使配置生效。</i>"
-        fi
+        # 恢复 TG 通知 (移除引起 Bug 的 command -v 判断)
+        tg_send "${msg}%0A%0A🔄 <b>状态:</b> <i>自检通过，请择机触发重启使配置生效。</i>"
     else
         log_err "❌ 严重故障：生成的配置文件未通过 UCI 语法检查！"
         log_err "为保护系统网络稳定，已拦截本次覆盖，继续运行原有安全配置。"
