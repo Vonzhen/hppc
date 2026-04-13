@@ -1,16 +1,16 @@
 #!/bin/sh
-# --- [ HPPC Core: 配置合成 (Synthesize) v3.6 智能按需版 (含 Vmess/WS) ] ---
+# --- [ HPPC Core: 配置合成 (Synthesize) v3.6.8 完美排版版 ] ---
 # 职责：解析路由策略 -> 生成规则申领单 -> 验证可用性熔断 -> 影子合并与自检 -> 状态通报
+# 修复：解决各节点之间空行排版不一致的问题，保持配置文件绝对整洁
 
-source /etc/hppc/hppc.conf
-source /usr/share/hppc/lib/utils.sh
+. /etc/hppc/hppc.conf
+. /usr/share/hppc/lib/utils.sh
 
-# 资源路径
 TMP_BASE="/tmp/hp_base.uci"
 TMP_NODES="/tmp/hp_nodes.uci"
 TMP_GROUPS="/tmp/hp_groups.uci"
-TMP_RULES="/tmp/hp_rules.uci"     
-REQ_LIST="/tmp/hp_assets.req"     
+TMP_RULES="/tmp/hp_rules.uci"
+REQ_LIST="/tmp/hp_assets.req"
 SUCCESS_LIST="/tmp/hp_assets.success" 
 FINAL_CONF="/etc/config/homeproxy"
 TEMPLATE_DIR="/usr/share/hppc/templates/models"
@@ -18,7 +18,7 @@ COUNT_FILE="/tmp/hp_counts"
 MODULE_ASSETS="/usr/share/hppc/modules/assets.sh"
 
 # ==========================================
-# 1. 核心算法：节点负载映射 (Strategy Mapping)
+# 1. 核心算法：节点负载映射
 # ==========================================
 map_logic() {
     local val=$(echo "$1" | tr -d "' \t\r\n")
@@ -49,14 +49,12 @@ map_logic() {
 }
 
 # ==========================================
-# 主流程 (The Grand Process)
+# 主流程
 # ==========================================
-
 : > "$TMP_NODES"
 : > "$TMP_GROUPS"
 : > "$TMP_RULES"
 
-# --- 节点池存活统计 (Counting) ---
 log_info "正在统计各区域可用节点数量..."
 if ! command -v jq >/dev/null 2>&1; then
     log_err "缺少 JSON 解析器 (jq)，请执行 opkg install jq"
@@ -85,7 +83,6 @@ for reg in $REGIONS; do
     echo "${lower_reg}=${count}" >> "$COUNT_FILE"
 done
 
-# --- 重塑路由策略 (Mapping) ---
 log_info "正在映射基础路由策略 (Hp_Base)..."
 BASE_TEMPLATE="/usr/share/hppc/templates/hp_base.uci"
 
@@ -112,9 +109,6 @@ while IFS= read -r line; do
 done < "$TMP_BASE.raw"
 rm "$TMP_BASE.raw"
 
-# ==========================================
-# 意图感知与规则集准备 (Ruleset Requisition)
-# ==========================================
 log_info "正在扫描配置引用，生成规则集更新清单..."
 grep "list rule_set" "$TMP_BASE" | awk -F"'" '{print $2}' | awk '!x[$0]++' > "/tmp/hp_assets_id.list"
 
@@ -130,9 +124,6 @@ else
     exit 1
 fi
 
-# ==========================================
-# 安全熔断与规则铸造 (Fault Tolerance & Rules Build)
-# ==========================================
 log_info "正在执行规则集可用性检查与配置生成..."
 
 SUCCESS_IDS=" "
@@ -146,7 +137,6 @@ mv "$TMP_BASE" "$TMP_BASE.raw2"
 : > "$TMP_BASE"
 MISSING_COUNT=0
 
-# 1. 熔断失效引用
 while IFS= read -r line; do
     if echo "$line" | grep -q "list rule_set"; then
         id=$(echo "$line" | awk -F"'" '{print $2}')
@@ -162,7 +152,6 @@ while IFS= read -r line; do
 done < "$TMP_BASE.raw2"
 rm "$TMP_BASE.raw2"
 
-# 2. 动态生成规则集 UCI
 for id in $SUCCESS_IDS; do
     [ -z "$id" ] && continue
     fname=$(id_to_filename "$id")
@@ -179,7 +168,6 @@ for id in $SUCCESS_IDS; do
     } >> "$TMP_RULES"
 done
 
-# --- 组建区域负载均衡组 ---
 log_info "正在组建区域负载均衡组 (Routing Nodes)..."
 for reg in $REGIONS; do
     idx=1
@@ -208,33 +196,65 @@ for reg in $REGIONS; do
     done
 done
 
-# --- 注入代理节点配置 ---
 log_info "正在注入代理节点配置..."
 echo "$JSON_DATA" | jq -c '.[]' | while read -r row; do
     LABEL=$(echo "$row" | jq -r '.tag')
     ID=$(echo -n "$LABEL" | md5sum | awk '{print $1}')
     TYPE=$(echo "$row" | jq -r '.type')
     SNIP="$TEMPLATE_DIR/${TYPE}.uci"
+    NODE_TMP="/tmp/hp_node_single.uci"
     
     if [ -f "$SNIP" ]; then
-        SERVER=$(echo "$row" | jq -r '.server')
-        PORT=$(echo "$row" | jq -r '.server_port')
-        PASSWORD=$(echo "$row" | jq -r '.password // empty')
-        UUID=$(echo "$row" | jq -r '.uuid // empty')
-        METHOD=$(echo "$row" | jq -r '.method // empty')
+        > "$NODE_TMP"
+    
+        # [独立提取模块] 彻底切断级联报错
+        SERVER=$(echo "$row" | jq -r '.server // empty' 2>/dev/null)
         
-        [ "$(echo "$row" | jq -r '.tls.enabled // false')" = "true" ] && TLS="1" || TLS="0"
-        [ "$(echo "$row" | jq -r '.tls.insecure // false')" = "true" ] && INSECURE="1" || INSECURE="0"
-        SNI=$(echo "$row" | jq -r '.tls.server_name // .host // .server')
-        ALPN=$(echo "$row" | jq -r '.tls.alpn[0] // "h3"')
-        RAW_UTLS=$(echo "$row" | jq -r '.tls.utls // empty')
-        [ "$RAW_UTLS" = "null" ] && UTLS_VAL="chrome" || UTLS_VAL=$(echo "$RAW_UTLS" | jq -r '.fingerprint // "chrome"')
+        PORT=$(echo "$row" | jq -r '.server_port // empty' 2>/dev/null)
+        [ -z "$PORT" ] || [ "$PORT" = "null" ] && PORT=$(echo "$row" | jq -r '.port // empty' 2>/dev/null)
+        
+        PASSWORD=$(echo "$row" | jq -r '.password // empty' 2>/dev/null)
+        UUID=$(echo "$row" | jq -r '.uuid // empty' 2>/dev/null)
+        METHOD=$(echo "$row" | jq -r '.method // empty' 2>/dev/null)
+        
+        TLS="0"
+        if echo "$row" | jq -e '.tls == true or .tls.enabled == true' >/dev/null 2>&1; then
+            TLS="1"
+        fi
+        
+        INSECURE="0"
+        if echo "$row" | jq -e '.tls.insecure == true' >/dev/null 2>&1; then
+            INSECURE="1"
+        fi
+        
+        WS_HOST=$(echo "$row" | jq -r '.transport.headers.Host // empty' 2>/dev/null)
+        [ -z "$WS_HOST" ] || [ "$WS_HOST" = "null" ] && WS_HOST=$(echo "$row" | jq -r '."ws-opts".headers.Host // empty' 2>/dev/null)
+        [ "$WS_HOST" = "null" ] && WS_HOST=""
+        
+        WS_PATH=$(echo "$row" | jq -r '.transport.path // empty' 2>/dev/null)
+        [ -z "$WS_PATH" ] || [ "$WS_PATH" = "null" ] && WS_PATH=$(echo "$row" | jq -r '."ws-opts".path // empty' 2>/dev/null)
+        [ "$WS_PATH" = "null" ] && WS_PATH=""
+        
+        SNI=$(echo "$row" | jq -r '.tls.server_name // empty' 2>/dev/null)
+        [ -z "$SNI" ] || [ "$SNI" = "null" ] && SNI=$(echo "$row" | jq -r '.sni // empty' 2>/dev/null)
+        [ -z "$SNI" ] || [ "$SNI" = "null" ] && SNI="$WS_HOST"
+        [ -z "$SNI" ] || [ "$SNI" = "null" ] && SNI=$(echo "$row" | jq -r '.host // empty' 2>/dev/null)
+        [ -z "$SNI" ] || [ "$SNI" = "null" ] && SNI="$SERVER"
+        [ "$SNI" = "null" ] && SNI=""
+        
+        ALPN=$(echo "$row" | jq -r '.tls.alpn[0] // empty' 2>/dev/null)
+        [ -z "$ALPN" ] || [ "$ALPN" = "null" ] && ALPN="h3"
+        
+        RAW_UTLS=$(echo "$row" | jq -r '.tls.utls // empty' 2>/dev/null)
+        [ -z "$RAW_UTLS" ] || [ "$RAW_UTLS" = "null" ] && UTLS_VAL="" || UTLS_VAL=$(echo "$RAW_UTLS" | jq -r '.fingerprint // empty' 2>/dev/null)
+        [ "$UTLS_VAL" = "null" ] && UTLS_VAL=""
 
-        FLOW=$(echo "$row" | jq -r '.flow // empty')
-        CONGESTION=$(echo "$row" | jq -r '.congestion_control // "bbr"')
+        FLOW=$(echo "$row" | jq -r '.flow // empty' 2>/dev/null)
+        CONGESTION=$(echo "$row" | jq -r '.congestion_control // empty' 2>/dev/null)
+        [ -z "$CONGESTION" ] || [ "$CONGESTION" = "null" ] && CONGESTION="bbr"
         
-        PK=$(echo "$row" | jq -r '.tls.reality.public_key // empty')
-        SID=$(echo "$row" | jq -r '.tls.reality.short_id // empty')
+        PK=$(echo "$row" | jq -r '.tls.reality.public_key // empty' 2>/dev/null)
+        SID=$(echo "$row" | jq -r '.tls.reality.short_id // empty' 2>/dev/null)
         if [ -n "$PK" ] && [ "$PK" != "null" ]; then
              REALITY_ENABLE="1"
         else
@@ -242,14 +262,18 @@ echo "$JSON_DATA" | jq -c '.[]' | while read -r row; do
              PK=""; SID=""
         fi
 
-        # [新增] 专门为 Vmess 与 WebSocket 准备的字段提取
-        ALTER_ID=$(echo "$row" | jq -r '.alterId // 0')
-        CIPHER=$(echo "$row" | jq -r '.cipher // "auto"')
-        TRANSPORT=$(echo "$row" | jq -r '.network // "tcp"')
-        WS_PATH=$(echo "$row" | jq -r '."ws-opts".path // empty')
-        WS_HOST=$(echo "$row" | jq -r '."ws-opts".headers.Host // empty')
+        ALTER_ID=$(echo "$row" | jq -r '.alter_id // empty' 2>/dev/null)
+        [ -z "$ALTER_ID" ] || [ "$ALTER_ID" = "null" ] && ALTER_ID=$(echo "$row" | jq -r '.alterId // empty' 2>/dev/null)
+        [ -z "$ALTER_ID" ] || [ "$ALTER_ID" = "null" ] && ALTER_ID="0"
+        
+        CIPHER=$(echo "$row" | jq -r '.security // empty' 2>/dev/null)
+        [ -z "$CIPHER" ] || [ "$CIPHER" = "null" ] && CIPHER=$(echo "$row" | jq -r '.cipher // empty' 2>/dev/null)
+        [ -z "$CIPHER" ] || [ "$CIPHER" = "null" ] && CIPHER="auto"
+        
+        TRANSPORT=$(echo "$row" | jq -r '.transport.type // empty' 2>/dev/null)
+        [ -z "$TRANSPORT" ] || [ "$TRANSPORT" = "null" ] && TRANSPORT=$(echo "$row" | jq -r '.network // empty' 2>/dev/null)
+        [ -z "$TRANSPORT" ] || [ "$TRANSPORT" = "null" ] || [ "$TRANSPORT" = "tcp" ] && TRANSPORT=""
 
-        # 核心替换 (针对含斜杠的 WS_PATH 变量，采用 | 作为 sed 分隔符)
         cat "$SNIP" | sed \
             -e "s/{{ID}}/$ID/g" \
             -e "s/{{LABEL}}/$LABEL/g" \
@@ -273,18 +297,40 @@ echo "$JSON_DATA" | jq -c '.[]' | while read -r row; do
             -e "s|{{TRANSPORT}}|$TRANSPORT|g" \
             -e "s|{{WS_HOST}}|$WS_HOST|g" \
             -e "s|{{WS_PATH}}|$WS_PATH|g" \
-            >> "$TMP_NODES"
-            
+            > "$NODE_TMP"
+
+        if [ "$TLS" = "1" ] && ! grep -q "option tls_utls" "$NODE_TMP"; then
+            echo "    option tls_utls '$UTLS_VAL'" >> "$NODE_TMP"
+        fi
+        
+        if [ "$TYPE" = "vless" ] || [ "$TYPE" = "trojan" ]; then
+            if [ "$REALITY_ENABLE" = "1" ] || grep -q "option tls_reality '1'" "$NODE_TMP"; then
+                if ! grep -q "option tls_reality_short_id" "$NODE_TMP"; then
+                    echo "    option tls_reality_short_id '$SID'" >> "$NODE_TMP"
+                fi
+                if ! grep -q "option tls_reality_public_key" "$NODE_TMP"; then
+                    echo "    option tls_reality_public_key '$PK'" >> "$NODE_TMP"
+                fi
+            fi
+            if [ "$TYPE" = "vless" ] && ! grep -q "option vless_flow" "$NODE_TMP"; then
+                echo "    option vless_flow '$FLOW'" >> "$NODE_TMP"
+            fi
+        fi
+
+        # [排版优化]：彻底清除临时文件中的多余空行，保证配置纯净
+        sed -i '/^[[:space:]]*$/d' "$NODE_TMP"
+
+        # 统一输出：每个纯净的节点块后，严格追加一个空行分割
+        cat "$NODE_TMP" >> "$TMP_NODES"
         echo "" >> "$TMP_NODES"
     fi
 done
 
 # ==========================================
-# 最终合并与影子自检 (Shadow-Write & Validation)
+# 最终合并与影子自检
 # ==========================================
 if [ -s "$TMP_BASE" ] && [ -s "$TMP_NODES" ]; then
     
-    # 1. 写入影子沙盒
     SHADOW_DIR="/tmp/hppc_shadow"
     rm -rf "$SHADOW_DIR"
     mkdir -p "$SHADOW_DIR"
@@ -293,18 +339,15 @@ if [ -s "$TMP_BASE" ] && [ -s "$TMP_NODES" ]; then
     log_info "正在合成系统配置至内存沙盒..."
     cat "$TMP_BASE" "$TMP_RULES" "$TMP_GROUPS" "$TMP_NODES" > "$SHADOW_CONF"
     
-    # 2. 核心防线：UCI 语法原子校验
     log_info "正在执行 UCI 语法安全自检..."
     if uci -q -c "$SHADOW_DIR" show homeproxy >/dev/null 2>&1; then
         log_success "✅ 语法自检通过，未发现关键逻辑损坏。"
         
-        # 3. 稳妥替换：先备份，后安全覆盖 (防 PermissionError Bug，必须用 cat)
         [ -f "$FINAL_CONF" ] && cp "$FINAL_CONF" "$FINAL_CONF.bak"
         cat "$SHADOW_CONF" > "$FINAL_CONF"
         rm -rf "$SHADOW_DIR"
         log_success "✅ 配置文件已成功原子化替换。"
         
-        # 构建结构化战报
         stats=$(cat $COUNT_FILE | tr '\n' ' ' | sed 's/=$//')
         msg="📊 <b>[${LOCATION}] 系统配置更新报告</b>%0A"
         msg="${msg}--------------------------------%0A"
@@ -315,7 +358,6 @@ if [ -s "$TMP_BASE" ] && [ -s "$TMP_NODES" ]; then
             msg="${msg}%0A%0A⚠️ <b>依赖异常:</b> <i>发现 $MISSING_COUNT 个不可用规则集，触发熔断，已被自动跳过。</i>"
         fi
         
-        # 恢复 TG 通知 (移除引起 Bug 的 command -v 判断)
         tg_send "${msg}%0A%0A🔄 <b>状态:</b> <i>自检通过，请择机触发重启使配置生效。</i>"
     else
         log_err "❌ 严重故障：生成的配置文件未通过 UCI 语法检查！"
